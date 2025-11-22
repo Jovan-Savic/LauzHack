@@ -1,15 +1,25 @@
-# Generative AI Backend with Together.ai
+# Generative AI App with Together.ai
 
-A Flask-based backend API for generating AI responses using Together.ai's powerful language models.
+A full-stack application with a modern web interface and Flask backend API for generating AI responses using Together.ai's powerful language models.
 
 ## Features
 
+### Backend
 - 🚀 RESTful API endpoints for AI text generation
 - 🔄 Streaming response support for real-time generation
 - 🎯 Multiple model options (Mixtral, Llama 3, Mistral, Qwen)
 - 🔒 Environment variable configuration
 - 🌐 CORS enabled for frontend integration
 - ⚡ Simple and easy to deploy
+
+### Frontend
+- 💬 Beautiful, modern chat interface
+- 🌙 Dark mode design with smooth animations
+- ⚙️ Adjustable generation settings (temperature, max tokens)
+- 🔄 Real-time streaming responses
+- 📱 Fully responsive mobile design
+- 🎨 Syntax highlighting for code blocks
+- ✨ One-click example prompts
 
 ## Prerequisites
 
@@ -20,16 +30,16 @@ A Flask-based backend API for generating AI responses using Together.ai's powerf
 
 ### 1. Install Dependencies
 
-```bash
-pip install -r requirements.txt
+```powershell
+py -m pip install -r requirements.txt
 ```
 
 ### 2. Configure Environment Variables
 
 Copy the example environment file and add your Together.ai API key:
 
-```bash
-copy .env.example .env
+```powershell
+Copy-Item .env.example .env
 ```
 
 Then edit `.env` and replace `your_together_api_key_here` with your actual Together.ai API key:
@@ -38,13 +48,28 @@ Then edit `.env` and replace `your_together_api_key_here` with your actual Toget
 TOGETHER_API_KEY=your_actual_api_key_here
 ```
 
-### 3. Run the Server
+**Get your API key:** Go to [https://api.together.xyz/](https://api.together.xyz/), sign up, and create an API key in Settings.
 
-```bash
-python app.py
+### 3. Run the Backend Server
+
+```powershell
+py app.py
 ```
 
-The server will start on `http://localhost:5000`
+The backend will start on `http://localhost:5000`
+
+### 4. Open the Frontend
+
+Simply open `index.html` in your web browser, or use a local server:
+
+```powershell
+# Using Python's built-in server
+py -m http.server 8000
+```
+
+Then navigate to `http://localhost:8000` in your browser.
+
+**Note:** The frontend will automatically connect to the backend at `http://localhost:5000`
 
 ## API Endpoints
 
@@ -197,12 +222,57 @@ Error responses include details:
 }
 ```
 
+## Using the Frontend
+
+Once both the backend and frontend are running:
+
+1. **Select a Model**: Choose from the dropdown menu (Mixtral, Llama 3, etc.)
+2. **Adjust Settings**: Click the ⚙️ icon to modify:
+   - Max Tokens (128-2048)
+   - Temperature (0-1)
+   - Streaming mode (on/off)
+3. **Start Chatting**: Type your message or click an example prompt
+4. **View Responses**: Watch as the AI generates responses in real-time
+
+### Keyboard Shortcuts
+- `Enter` - Send message
+- `Shift + Enter` - New line in message
+
+## Project Structure
+
+```
+LauzHack/
+├── app.py              # Flask backend server
+├── requirements.txt    # Python dependencies
+├── .env               # Environment variables (API key)
+├── .env.example       # Environment template
+├── index.html         # Frontend HTML structure
+├── style.css          # Frontend styling
+├── script.js          # Frontend JavaScript logic
+└── README.md          # Documentation
+```
+
+## Troubleshooting
+
+### Backend won't start
+- Make sure all dependencies are installed: `py -m pip install -r requirements.txt`
+- Check that your `.env` file has a valid Together.ai API key
+
+### Frontend can't connect
+- Ensure the backend is running on `http://localhost:5000`
+- Check browser console for CORS errors
+- Try refreshing the page
+
+### "Server not responding" message
+- Start the backend server first: `py app.py`
+- Wait a few seconds for the server to initialize
+
 ## Development
 
 To run in development mode with auto-reload, the app is already configured with `debug=True`. Just run:
 
-```bash
-python app.py
+```powershell
+py app.py
 ```
 
 ## License

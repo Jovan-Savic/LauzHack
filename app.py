@@ -25,7 +25,7 @@ def generate():
     Expected JSON body:
     {
         "prompt": "Your prompt here",
-        "model": "mistralai/Mixtral-8x7B-Instruct-v0.1" (optional),
+        "model": "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo" (optional),
         "max_tokens": 512 (optional),
         "temperature": 0.7 (optional)
     }
@@ -37,7 +37,7 @@ def generate():
             return jsonify({"error": "Prompt is required"}), 400
         
         prompt = data['prompt']
-        model = data.get('model', 'mistralai/Mixtral-8x7B-Instruct-v0.1')
+        model = data.get('model', 'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo')
         max_tokens = data.get('max_tokens', 512)
         temperature = data.get('temperature', 0.7)
         
@@ -71,7 +71,7 @@ def stream_generate():
     Expected JSON body:
     {
         "prompt": "Your prompt here",
-        "model": "mistralai/Mixtral-8x7B-Instruct-v0.1" (optional),
+        "model": "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo" (optional),
         "max_tokens": 512 (optional),
         "temperature": 0.7 (optional)
     }
@@ -83,7 +83,7 @@ def stream_generate():
             return jsonify({"error": "Prompt is required"}), 400
         
         prompt = data['prompt']
-        model = data.get('model', 'mistralai/Mixtral-8x7B-Instruct-v0.1')
+        model = data.get('model', 'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo')
         max_tokens = data.get('max_tokens', 512)
         temperature = data.get('temperature', 0.7)
         
@@ -108,24 +108,76 @@ def stream_generate():
             "error": str(e)
         }), 500
 
+@app.route('/api/generate-image', methods=['POST'])
+def generate_image():
+    """
+    Generate an image using Together.ai
+    Expected JSON body:
+    {
+        "prompt": "Your image description here",
+        "model": "black-forest-labs/FLUX.1-schnell" (optional),
+        "steps": 4 (optional),
+        "n": 1 (optional)
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'prompt' not in data:
+            return jsonify({"error": "Prompt is required"}), 400
+        
+        prompt = data['prompt']
+        model = data.get('model', 'black-forest-labs/FLUX.1-schnell')
+        steps = data.get('steps', 4)
+        n = data.get('n', 1)
+        
+        # Generate image using Together.ai
+        response = client.images.generate(
+            prompt=prompt,
+            model=model,
+            steps=steps,
+            n=n,
+        )
+        
+        # Extract the image URL
+        image_url = response.data[0].url if response.data else None
+        
+        return jsonify({
+            "success": True,
+            "image_url": image_url,
+            "prompt": prompt,
+            "model": model
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
 @app.route('/api/models', methods=['GET'])
 def get_models():
     """Return a list of popular Together.ai models"""
     models = [
         {
+            "id": "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+            "name": "Llama 3.1 8B Instruct Turbo",
+            "description": "Fast and efficient Llama 3.1 model"
+        },
+        {
+            "id": "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+            "name": "Llama 3.1 70B Instruct Turbo",
+            "description": "Powerful Llama 3.1 model"
+        },
+        {
+            "id": "meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
+            "name": "Llama 3.1 405B Instruct Turbo",
+            "description": "Most powerful Llama model"
+        },
+        {
             "id": "mistralai/Mixtral-8x7B-Instruct-v0.1",
             "name": "Mixtral 8x7B Instruct",
             "description": "High-quality mixture of experts model"
-        },
-        {
-            "id": "meta-llama/Llama-3-70b-chat-hf",
-            "name": "Llama 3 70B Chat",
-            "description": "Meta's powerful chat model"
-        },
-        {
-            "id": "meta-llama/Llama-3-8b-chat-hf",
-            "name": "Llama 3 8B Chat",
-            "description": "Smaller, faster Llama 3 model"
         },
         {
             "id": "mistralai/Mistral-7B-Instruct-v0.2",
@@ -133,8 +185,13 @@ def get_models():
             "description": "Efficient 7B parameter model"
         },
         {
-            "id": "Qwen/Qwen2-72B-Instruct",
-            "name": "Qwen 2 72B Instruct",
+            "id": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+            "name": "Qwen 2.5 7B Instruct Turbo",
+            "description": "Fast multilingual model"
+        },
+        {
+            "id": "Qwen/Qwen2.5-72B-Instruct-Turbo",
+            "name": "Qwen 2.5 72B Instruct Turbo",
             "description": "Powerful multilingual model"
         }
     ]
