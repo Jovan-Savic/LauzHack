@@ -155,6 +155,65 @@ def generate_image():
             "error": str(e)
         }), 500
 
+@app.route('/api/generate-multiple-images', methods=['POST'])
+def generate_multiple_images():
+    """
+    Generate multiple images for different prompts
+    Expected JSON body:
+    {
+        "prompts": ["prompt1", "prompt2", ...],
+        "model": "black-forest-labs/FLUX.1-schnell" (optional)
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'prompts' not in data:
+            return jsonify({"error": "Prompts array is required"}), 400
+        
+        prompts = data['prompts']
+        model = data.get('model', 'black-forest-labs/FLUX.1-schnell')
+        
+        images = []
+        for prompt in prompts[:5]:  # Limit to 5 images to avoid timeout
+            try:
+                response = client.images.generate(
+                    prompt=prompt,
+                    model=model,
+                    steps=4,
+                    n=1,
+                )
+                
+                if response.data:
+                    images.append({
+                        "success": True,
+                        "image_url": response.data[0].url,
+                        "prompt": prompt
+                    })
+                else:
+                    images.append({
+                        "success": False,
+                        "prompt": prompt,
+                        "error": "No image generated"
+                    })
+            except Exception as e:
+                images.append({
+                    "success": False,
+                    "prompt": prompt,
+                    "error": str(e)
+                })
+        
+        return jsonify({
+            "success": True,
+            "images": images
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
 @app.route('/api/models', methods=['GET'])
 def get_models():
     """Return a list of popular Together.ai models"""

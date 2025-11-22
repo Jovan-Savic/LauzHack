@@ -338,14 +338,103 @@ async function displayPlacesOnMap(places, category) {
 }
 
 // Show place details in side panel
-function showPlaceDetails(place, number) {
+async function showPlaceDetails(place, number) {
     detailsTitle.textContent = `${number}. ${place.name}`;
     detailsDescription.textContent = place.description;
     
-    // Load image
-    const seed = encodeURIComponent(place.name.replace(/\s+/g, '-').toLowerCase());
-    const imageUrl = `https://picsum.photos/seed/${seed}/400/250`;
-    detailsImage.style.backgroundImage = `url(${imageUrl})`;
+    // Show loading placeholder
+    detailsImage.style.backgroundImage = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
+    detailsImage.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:white;font-size:48px;">📸</div>';
+    
+    // Try multiple image sources
+    let imageUrl = null;
+    
+    try {
+        // METHOD 1: Try Wikipedia/Wikimedia Commons API
+        console.log('Trying Wikipedia for:', place.name);
+        const wikiResponse = await fetch(`https://en.wikipedia.org/w/api.php?action=query&format=json&prop=pageimages&piprop=original&titles=${encodeURIComponent(place.name)}&origin=*`);
+        const wikiData = await wikiResponse.json();
+        
+        const pages = wikiData.query?.pages;
+        if (pages) {
+            const pageId = Object.keys(pages)[0];
+            if (pageId !== '-1') {
+                imageUrl = pages[pageId]?.original?.source;
+            }
+        }
+        
+        if (imageUrl) {
+            console.log('Found Wikipedia image:', imageUrl);
+            detailsImage.style.backgroundImage = `url(${imageUrl})`;
+            detailsImage.innerHTML = '';
+        } else {
+            // METHOD 2: Try Google Maps Static API with Street View
+            console.log('Wikipedia failed, trying Google Maps Street View');
+            if (place.latitude && place.longitude) {
+                // Google Maps Street View Static API (works without API key for basic usage)
+                const streetViewUrl = `https://maps.googleapis.com/maps/api/streetview?size=400x250&location=${place.latitude},${place.longitude}&heading=0&pitch=0&fov=90`;
+                
+                // Test if the image loads
+                const img = new Image();
+                img.onload = () => {
+                    console.log('Found Street View image');
+                    detailsImage.style.backgroundImage = `url(${streetViewUrl})`;
+                    detailsImage.innerHTML = '';
+                };
+                img.onerror = () => {
+                    console.log('Street View failed, using gradient');
+                    useFallbackGradient(number);
+                };
+                img.src = streetViewUrl;
+            } else {
+                // METHOD 3: Try Wikimedia Commons search
+                console.log('No coordinates, trying Wikimedia Commons search');
+                const commonsResponse = await fetch(`https://commons.wikimedia.org/w/api.php?action=query&format=json&list=search&srsearch=${encodeURIComponent(place.name + ' ' + userLocation.name)}&srnamespace=6&srlimit=1&origin=*`);
+                const commonsData = await commonsResponse.json();
+                
+                if (commonsData.query?.search?.length > 0) {
+                    const imageTitle = commonsData.query.search[0].title;
+                    const imageInfoResponse = await fetch(`https://commons.wikimedia.org/w/api.php?action=query&format=json&prop=imageinfo&iiprop=url&titles=${encodeURIComponent(imageTitle)}&origin=*`);
+                    const imageInfoData = await imageInfoResponse.json();
+                    
+                    const imagePages = imageInfoData.query?.pages;
+                    if (imagePages) {
+                        const imagePageId = Object.keys(imagePages)[0];
+                        const commonsImageUrl = imagePages[imagePageId]?.imageinfo?.[0]?.url;
+                        
+                        if (commonsImageUrl) {
+                            console.log('Found Wikimedia Commons image:', commonsImageUrl);
+                            detailsImage.style.backgroundImage = `url(${commonsImageUrl})`;
+                            detailsImage.innerHTML = '';
+                        } else {
+                            useFallbackGradient(number);
+                        }
+                    } else {
+                        useFallbackGradient(number);
+                    }
+                } else {
+                    useFallbackGradient(number);
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Error loading images:', error);
+        useFallbackGradient(number);
+    }
+    
+    // Fallback gradient function
+    function useFallbackGradient(num) {
+        const colors = [
+            'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+            'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+            'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)',
+            'linear-gradient(135deg, #fa709a 0%, #fee140 100%)'
+        ];
+        const gradient = colors[num % colors.length];
+        detailsImage.style.backgroundImage = gradient;
+        detailsImage.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:white;font-size:48px;">🏛️</div>`;
+    }
     
     // Set directions button
     directionsBtn.onclick = () => {
