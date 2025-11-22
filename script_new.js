@@ -312,11 +312,8 @@ async function displayPlacesOnMap(places, category) {
                     })
                 }).addTo(map);
                 
-                // Add click event to show details
-                marker.on('click', () => showPlaceDetails(place, i + 1));
-                
-                // Add popup
-                marker.bindPopup(`<b>${place.name}</b><br>${place.description.substring(0, 100)}...`);
+                // Add click event to show details popup
+                marker.on('click', () => showPlaceDetails(place, i + 1, marker));
                 
                 markers.push(marker);
             }
@@ -337,115 +334,89 @@ async function displayPlacesOnMap(places, category) {
     }
 }
 
-// Show place details in side panel
-async function showPlaceDetails(place, number) {
-    detailsTitle.textContent = `${number}. ${place.name}`;
-    detailsDescription.textContent = place.description;
+// Show place details in popup next to marker
+async function showPlaceDetails(place, number, marker) {
+    // Create popup content with image
+    const popupContent = document.createElement('div');
+    popupContent.style.cssText = 'width: 280px; font-family: sans-serif;';
     
-    // Show loading placeholder
-    detailsImage.style.backgroundImage = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
-    detailsImage.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:white;font-size:48px;">📸</div>';
+    // Add image container
+    const imageDiv = document.createElement('div');
+    imageDiv.style.cssText = 'width: 100%; height: 150px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px 8px 0 0; display: flex; align-items: center; justify-content: center; color: white; font-size: 48px;';
+    imageDiv.innerHTML = '📸';
+    popupContent.appendChild(imageDiv);
     
-    // Try multiple image sources
-    let imageUrl = null;
+    // Add content container
+    const contentDiv = document.createElement('div');
+    contentDiv.style.cssText = 'padding: 12px; background: #1e293b; color: #f1f5f9; border-radius: 0 0 8px 8px;';
     
-    try {
-        // METHOD 1: Try Wikipedia/Wikimedia Commons API
-        console.log('Trying Wikipedia for:', place.name);
-        const wikiResponse = await fetch(`https://en.wikipedia.org/w/api.php?action=query&format=json&prop=pageimages&piprop=original&titles=${encodeURIComponent(place.name)}&origin=*`);
-        const wikiData = await wikiResponse.json();
-        
-        const pages = wikiData.query?.pages;
-        if (pages) {
-            const pageId = Object.keys(pages)[0];
-            if (pageId !== '-1') {
-                imageUrl = pages[pageId]?.original?.source;
-            }
-        }
-        
-        if (imageUrl) {
-            console.log('Found Wikipedia image:', imageUrl);
-            detailsImage.style.backgroundImage = `url(${imageUrl})`;
-            detailsImage.innerHTML = '';
-        } else {
-            // METHOD 2: Try Google Maps Static API with Street View
-            console.log('Wikipedia failed, trying Google Maps Street View');
-            if (place.latitude && place.longitude) {
-                // Google Maps Street View Static API (works without API key for basic usage)
-                const streetViewUrl = `https://maps.googleapis.com/maps/api/streetview?size=400x250&location=${place.latitude},${place.longitude}&heading=0&pitch=0&fov=90`;
-                
-                // Test if the image loads
-                const img = new Image();
-                img.onload = () => {
-                    console.log('Found Street View image');
-                    detailsImage.style.backgroundImage = `url(${streetViewUrl})`;
-                    detailsImage.innerHTML = '';
-                };
-                img.onerror = () => {
-                    console.log('Street View failed, using gradient');
-                    useFallbackGradient(number);
-                };
-                img.src = streetViewUrl;
-            } else {
-                // METHOD 3: Try Wikimedia Commons search
-                console.log('No coordinates, trying Wikimedia Commons search');
-                const commonsResponse = await fetch(`https://commons.wikimedia.org/w/api.php?action=query&format=json&list=search&srsearch=${encodeURIComponent(place.name + ' ' + userLocation.name)}&srnamespace=6&srlimit=1&origin=*`);
-                const commonsData = await commonsResponse.json();
-                
-                if (commonsData.query?.search?.length > 0) {
-                    const imageTitle = commonsData.query.search[0].title;
-                    const imageInfoResponse = await fetch(`https://commons.wikimedia.org/w/api.php?action=query&format=json&prop=imageinfo&iiprop=url&titles=${encodeURIComponent(imageTitle)}&origin=*`);
-                    const imageInfoData = await imageInfoResponse.json();
-                    
-                    const imagePages = imageInfoData.query?.pages;
-                    if (imagePages) {
-                        const imagePageId = Object.keys(imagePages)[0];
-                        const commonsImageUrl = imagePages[imagePageId]?.imageinfo?.[0]?.url;
-                        
-                        if (commonsImageUrl) {
-                            console.log('Found Wikimedia Commons image:', commonsImageUrl);
-                            detailsImage.style.backgroundImage = `url(${commonsImageUrl})`;
-                            detailsImage.innerHTML = '';
-                        } else {
-                            useFallbackGradient(number);
-                        }
-                    } else {
-                        useFallbackGradient(number);
-                    }
-                } else {
-                    useFallbackGradient(number);
-                }
-            }
-        }
-    } catch (error) {
-        console.error('Error loading images:', error);
-        useFallbackGradient(number);
-    }
+    const title = document.createElement('h3');
+    title.style.cssText = 'margin: 0 0 8px 0; font-size: 16px; font-weight: 700;';
+    title.textContent = `${number}. ${place.name}`;
+    contentDiv.appendChild(title);
     
-    // Fallback gradient function
-    function useFallbackGradient(num) {
-        const colors = [
-            'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
-            'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
-            'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)',
-            'linear-gradient(135deg, #fa709a 0%, #fee140 100%)'
-        ];
-        const gradient = colors[num % colors.length];
-        detailsImage.style.backgroundImage = gradient;
-        detailsImage.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:white;font-size:48px;">🏛️</div>`;
-    }
+    const description = document.createElement('p');
+    description.style.cssText = 'margin: 0 0 12px 0; font-size: 13px; line-height: 1.4; color: #94a3b8; max-height: 60px; overflow: hidden;';
+    description.textContent = place.description.length > 120 ? place.description.substring(0, 120) + '...' : place.description;
+    contentDiv.appendChild(description);
     
-    // Set directions button
-    directionsBtn.onclick = () => {
+    const button = document.createElement('button');
+    button.style.cssText = 'width: 100%; padding: 8px; background: #6366f1; color: white; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.2s;';
+    button.textContent = '🗺️ Open in Google Maps';
+    button.onmouseover = () => button.style.background = '#4f46e5';
+    button.onmouseout = () => button.style.background = '#6366f1';
+    button.onclick = () => {
         if (place.latitude && place.longitude) {
             window.open(`https://www.google.com/maps/search/?api=1&query=${place.latitude},${place.longitude}`, '_blank');
         } else {
             window.open(`https://www.google.com/maps/search/${encodeURIComponent(place.name + ' ' + userLocation.name)}`, '_blank');
         }
     };
+    contentDiv.appendChild(button);
     
-    detailsPanel.classList.add('active');
+    popupContent.appendChild(contentDiv);
+    
+    // Bind popup to marker and open it
+    marker.bindPopup(popupContent, {
+        maxWidth: 300,
+        className: 'custom-popup'
+    }).openPopup();
+    
+    // Try to load image asynchronously
+    loadPlaceImage(place, imageDiv, number);
+}
+
+// Load image for place (async)
+async function loadPlaceImage(place, imageDiv, number) {
+    try {
+        // Try Wikipedia
+        console.log('🔍 Loading image for:', place.name);
+        const wikiResponse = await fetch(`https://en.wikipedia.org/w/api.php?action=query&format=json&prop=pageimages&piprop=original&titles=${encodeURIComponent(place.name)}&origin=*`);
+        const wikiData = await wikiResponse.json();
+        
+        const pages = wikiData.query?.pages;
+        if (pages) {
+            const pageId = Object.keys(pages)[0];
+            if (pageId !== '-1' && pages[pageId]?.original?.source) {
+                const imageUrl = pages[pageId].original.source;
+                console.log('✅ Found image');
+                imageDiv.style.backgroundImage = `url(${imageUrl})`;
+                imageDiv.style.backgroundSize = 'cover';
+                imageDiv.style.backgroundPosition = 'center';
+                imageDiv.innerHTML = '';
+                return;
+            }
+        }
+        
+        // Fallback to gradient with icon
+        console.log('ℹ️ No image found, using icon');
+        const colors = ['#667eea', '#f093fb', '#4facfe', '#43e97b', '#fa709a'];
+        const icons = ['🏛️', '🍽️', '☕', '🖼️', '🌳'];
+        imageDiv.style.background = `linear-gradient(135deg, ${colors[number % colors.length]} 0%, ${colors[(number + 1) % colors.length]} 100%)`;
+        imageDiv.innerHTML = icons[number % icons.length];
+    } catch (error) {
+        console.error('❌ Error loading image:', error);
+    }
 }
 
 // Loading overlay

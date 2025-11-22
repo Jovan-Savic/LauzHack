@@ -341,13 +341,35 @@ body {
 
 /* Leaflet Popup Customization */
 .leaflet-popup-content-wrapper {
-    background: var(--surface);
+    background: transparent;
     color: var(--text);
     border-radius: 8px;
+    padding: 0;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+
+.leaflet-popup-content {
+    margin: 0;
+    width: auto !important;
 }
 
 .leaflet-popup-tip {
-    background: var(--surface);
+    background: #1e293b;
+}
+
+.custom-popup .leaflet-popup-close-button {
+    color: white;
+    font-size: 20px;
+    padding: 4px 8px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 4px;
+    top: 8px;
+    right: 8px;
+}
+
+.custom-popup .leaflet-popup-close-button:hover {
+    background: rgba(0, 0, 0, 0.5);
+    color: white;
 }
 
 /* Responsive Design */
