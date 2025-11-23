@@ -3,6 +3,7 @@ from flask_cors import CORS
 import os
 from dotenv import load_dotenv
 from together import Together
+from duckduckgo_search import DDGS
 
 # Load environment variables
 load_dotenv()
@@ -255,6 +256,53 @@ def get_models():
         }
     ]
     return jsonify({"models": models}), 200
+
+@app.route('/api/search-image', methods=['POST'])
+def search_image():
+    """
+    Search for an image using DuckDuckGo
+    Expected JSON body:
+    {
+        "query": "search query"
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'query' not in data:
+            return jsonify({"error": "Query is required"}), 400
+        
+        query = data['query']
+        
+        # Search for images
+        with DDGS() as ddgs:
+            results = list(ddgs.images(
+                keywords=query,
+                region="wt-wt",
+                safesearch="on",
+                size="Medium",
+                type_image="photo",
+                layout="Wide",
+                max_results=1
+            ))
+            
+            if results and len(results) > 0:
+                return jsonify({
+                    "success": True,
+                    "image_url": results[0]['image'],
+                    "source": "DuckDuckGo"
+                }), 200
+            else:
+                return jsonify({
+                    "success": False,
+                    "error": "No images found"
+                }), 404
+                
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 if __name__ == '__main__':
     # Check if API key is set

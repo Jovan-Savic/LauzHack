@@ -2,3 +2,4 @@ Flask==3.0.0
 flask-cors==4.0.0
 python-dotenv==1.0.0
 together==1.2.1
+duckduckgo-search>=4.0.0

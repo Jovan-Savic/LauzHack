@@ -79,7 +79,7 @@ function setupEventListeners() {
             
             // Update max walking distance
             maxWalkingMinutes = parseInt(btn.dataset.distance);
-            console.log(`🚶 Walking distance filter: ${maxWalkingMinutes === 999 ? 'Any' : maxWalkingMinutes + ' min'}`);
+            console.log(`Walking distance filter: ${maxWalkingMinutes === 999 ? 'Any' : maxWalkingMinutes + ' min'}`);
             
             // If places are already loaded, re-filter them
             if (currentPlaces.length > 0 && markers.length > 0) {
@@ -145,7 +145,7 @@ async function handleDetectLocation() {
             const lat = position.coords.latitude;
             const lon = position.coords.longitude;
             
-            console.log('✅ GPS Location detected:', lat, lon);
+            console.log('GPS location detected:', lat, lon);
             
             // Reverse geocode to get city name
             try {
@@ -177,7 +177,7 @@ async function handleDetectLocation() {
                 hideLoading();
             } catch (error) {
                 hideLoading();
-                console.error('❌ Error reverse geocoding:', error);
+                console.error('Error reverse geocoding:', error);
                 
                 // Still save location even if reverse geocoding fails
                 userLocation = {
@@ -195,17 +195,17 @@ async function handleDetectLocation() {
             }
         },
         async (error) => {
-            console.error('❌ Geolocation error:', error);
+            console.error('Geolocation error:', error);
             
             // If position unavailable, try IP-based geolocation as fallback
             if (error.code === error.POSITION_UNAVAILABLE) {
-                console.log('🔄 Trying IP-based geolocation...');
+                console.log('Trying IP-based geolocation...');
                 try {
                     const response = await fetch('https://ipapi.co/json/');
                     const data = await response.json();
                     
                     if (data.latitude && data.longitude) {
-                        console.log('✅ IP Location detected:', data.city, data.country_name);
+                        console.log('IP location detected:', data.city, data.country_name);
                         
                         userLocation = {
                             name: `${data.city}, ${data.country_name}`,
@@ -224,7 +224,7 @@ async function handleDetectLocation() {
                         return;
                     }
                 } catch (ipError) {
-                    console.error('❌ IP geolocation failed:', ipError);
+                    console.error('IP geolocation failed:', ipError);
                 }
             }
             
@@ -301,11 +301,11 @@ async function handleCategorySelect(category) {
     // Check cache first - but validate it's not empty
     const cached = getCachedRecommendations(category, userLocation.name);
     if (cached && cached.length > 0) {
-        console.log(`📦 Using ${cached.length} cached places`);
+        console.log(`Using ${cached.length} cached places`);
         displayPlacesOnMap(cached, category);
         return;
     } else if (cached && cached.length === 0) {
-        console.log(`⚠️ Cache has 0 places, fetching fresh data...`);
+        console.log(`Cache has 0 places, fetching fresh data...`);
         // Clear this bad cache entry
         const key = `${category}-${userLocation.name}`;
         delete cache.recommendations[key];
@@ -324,7 +324,7 @@ async function handleCategorySelect(category) {
             return;
         }
         
-        console.log(`🗺️ Found ${places.length} places from OpenStreetMap`);
+        console.log(`Found ${places.length} places from OpenStreetMap`);
         
         // Get descriptions from LLM in background
         enrichPlacesWithDescriptions(places, category);
@@ -374,7 +374,7 @@ async function searchPlacesWithOverpass(category, location) {
         out tags center 100;
     `;
     
-    console.log(`🔍 Querying Overpass API for ${category}...`);
+    console.log(`Querying Overpass API for ${category}...`);
     
     const response = await fetch('https://overpass-api.de/api/interpreter', {
         method: 'POST',
@@ -426,7 +426,7 @@ async function searchPlacesWithOverpass(category, location) {
         
         // Skip places with absolutely no metadata (score 0)
         if (metadataScore === 0) {
-            console.log(`⚠️ Skipping ${element.tags.name} - no metadata available`);
+            console.log(`Skipping ${element.tags.name} - no metadata available`);
             continue;
         }
         
@@ -458,14 +458,14 @@ async function searchPlacesWithOverpass(category, location) {
         return a.distanceKm - b.distanceKm;
     });
     
-    console.log(`✅ Found ${places.length} well-documented places, returning top 12`);
+    console.log(`Found ${places.length} well-documented places, returning top 12`);
     
     return places.slice(0, 12);
 }
 
 // Enrich places with AI-generated descriptions (background)
 async function enrichPlacesWithDescriptions(places, category) {
-    console.log('📝 Enriching places with AI descriptions in background...');
+    console.log('Enriching places with AI descriptions in background...');
     
     setTimeout(async () => {
         for (const place of places) {
@@ -490,18 +490,31 @@ async function enrichPlacesWithDescriptions(places, category) {
                 if (data.success) {
                     place.description = data.response.trim();
                     place.descriptionLoaded = true;
-                    console.log(`✅ Enriched: ${place.name}`);
+                    console.log(`Enriched: ${place.name}`);
                 }
             } catch (error) {
-                console.error(`Failed to enrich ${place.name}:`, error);
-                place.description = `A ${place.osmType} in ${userLocation.name}.`;
+                console.warn(`Backend offline for ${place.name}, using fallback description`);
+                // Create better fallback descriptions based on place type
+                const descriptions = {
+                    restaurant: `${place.name} is a restaurant in ${userLocation.name}. Check it out for local dining.`,
+                    cafe: `${place.name} is a cafe in ${userLocation.name}. A nice spot for coffee and relaxation.`,
+                    museum: `${place.name} is a museum in ${userLocation.name}. Explore its exhibitions and collections.`,
+                    park: `${place.name} is a park in ${userLocation.name}. Perfect for outdoor activities and nature.`,
+                    bar: `${place.name} is a bar in ${userLocation.name}. Great place for drinks and nightlife.`,
+                    pub: `${place.name} is a pub in ${userLocation.name}. Enjoy drinks and local atmosphere.`,
+                    attraction: `${place.name} is a popular attraction in ${userLocation.name}. Worth visiting!`,
+                    monument: `${place.name} is a monument in ${userLocation.name}. A significant historical landmark.`,
+                    hotel: `${place.name} is a hotel in ${userLocation.name}. Accommodation and hospitality services.`,
+                    viewpoint: `${place.name} is a viewpoint in ${userLocation.name}. Offers scenic views of the area.`
+                };
+                place.description = descriptions[place.osmType] || `${place.name} is a ${place.osmType} located in ${userLocation.name}.`;
                 place.descriptionLoaded = true;
             }
             
             await new Promise(resolve => setTimeout(resolve, 500));
         }
         
-        console.log('✅ All descriptions enriched');
+        console.log('All descriptions enriched');
     }, 1000); // Start after 1 second to not block display
 }
 
@@ -509,7 +522,7 @@ async function enrichPlacesWithDescriptions(places, category) {
 function parseAttractionsWithDescriptions(text) {
     const attractions = [];
     
-    console.log('📄 Parsing AI response...');
+    console.log('Parsing AI response...');
     
     // Pattern 1: "1. **Name** - Description"
     const pattern1 = /\d+\.\s*\*\*([^*]+)\*\*[\s\-–—:]+([^\n]+)/g;
@@ -547,11 +560,11 @@ function parseAttractionsWithDescriptions(text) {
     }
     
     if (attractions.length === 0) {
-        console.error('❌ Failed to parse any attractions from response:');
+        console.error('Failed to parse any attractions from response:');
         console.error(text.substring(0, 500)); // Show first 500 chars
     }
     
-    console.log(`📝 Successfully parsed ${attractions.length} places with descriptions`);
+    console.log(`Successfully parsed ${attractions.length} places with descriptions`);
     return attractions.slice(0, 8); // Ensure max 8 places
 }
 
@@ -584,7 +597,7 @@ async function displayPlacesWithParallelProcessing(places, category) {
         await new Promise(resolve => setTimeout(resolve, 500));
     }
     
-    console.log(`✅ Geocoded ${geocodedPlaces.length}/${places.length} places`);
+    console.log(`Geocoded ${geocodedPlaces.length}/${places.length} places`);
     
     // Phase 2: Add all markers to map immediately
     hideLoading();
@@ -595,7 +608,7 @@ async function displayPlacesWithParallelProcessing(places, category) {
         }
     }
     
-    console.log(`📍 Added ${markers.length} markers to map`);
+    console.log(`Added ${markers.length} markers to map`);
     
     // Check if places were filtered by distance
     const filteredCount = geocodedPlaces.filter(p => p.filteredByDistance).length;
@@ -603,7 +616,7 @@ async function displayPlacesWithParallelProcessing(places, category) {
     if (markers.length === 0 && filteredCount > 0) {
         // All places were filtered out by distance
         alert(`All ${filteredCount} places are beyond your ${maxWalkingMinutes} min walking distance.\n\nTry:\n• Increasing the distance filter (10 min or 30 min)\n• Selecting "Any" distance\n\nThe closest place is ${Math.round(geocodedPlaces[0].walkingMinutes)} minutes away.`);
-        console.log(`⚠️ All places filtered by distance. Closest: ${geocodedPlaces[0].name} at ${geocodedPlaces[0].walkingMinutes} min`);
+        console.log(`All places filtered by distance. Closest: ${geocodedPlaces[0].name} at ${geocodedPlaces[0].walkingMinutes} min`);
     } else if (markers.length === 0) {
         alert('Could not find locations for any places. Try a different category or location.');
     }
@@ -615,15 +628,15 @@ async function displayPlacesWithParallelProcessing(places, category) {
     }
     
     // Phase 3: Load images in background (non-blocking)
-    console.log(`🖼️ Starting background image loading...`);
-    loadAllImagesInBackground(geocodedPlaces);
+    // console.log(`🖼️ Starting background image loading...`);
+    // loadAllImagesInBackground(geocodedPlaces);
 }
 
 // Geocode a single place (parallel-safe)
 async function geocodePlaceParallel(place, category) {
     const query = `${place.name}, ${userLocation.name}`;
     
-    console.log(`🔍 Geocoding: ${place.name}`);
+    console.log(`Geocoding: ${place.name}`);
     
     // Try geocoding with multiple queries prioritizing local results
     const queries = [
@@ -638,7 +651,7 @@ async function geocodePlaceParallel(place, category) {
         
         const success = await tryGeocodeWithDistanceCheck(place, searchQuery, query, 50); // 50km max
         if (success) {
-            console.log(`✅ Geocoded within range: ${place.name}`);
+            console.log(`Geocoded within range: ${place.name}`);
             return place;
         }
         
@@ -646,7 +659,7 @@ async function geocodePlaceParallel(place, category) {
         await new Promise(resolve => setTimeout(resolve, 300));
     }
     
-    console.log(`❌ Failed to find ${place.name} within 50km`);
+    console.log(`Failed to find ${place.name} within 50km`);
     return null;
 }
 
@@ -663,7 +676,7 @@ async function tryGeocodeWithDistanceCheck(place, searchQuery, cacheKey, maxDist
         
         // Reject if too far
         if (distanceKm > maxDistanceKm) {
-            console.log(`   ❌ Rejected: ${distanceKm.toFixed(1)}km away (max: ${maxDistanceKm}km)`);
+            console.log(`   Rejected: ${distanceKm.toFixed(1)}km away (max: ${maxDistanceKm}km)`);
             place.latitude = null;
             place.longitude = null;
             return false;
@@ -691,12 +704,12 @@ async function loadAllImagesInBackground(places) {
         await new Promise(resolve => setTimeout(resolve, 200));
     }
     
-    console.log(`✅ Background image loading complete`);
+    console.log(`Background image loading complete`);
 }
 
 // Load image and cache it (doesn't display)
 async function loadImageToCache(place) {
-    console.log(`🖼️ Loading image for: ${place.name}`);
+    console.log(`Loading image for: ${place.name}`);
     
     // Try Wikipedia
     let imageUrl = await tryWikipediaImage(place.name);
@@ -711,7 +724,7 @@ async function loadImageToCache(place) {
     }
     
     if (imageUrl) {
-        console.log(`✅ Found image: ${place.name}`);
+        console.log(`Found image: ${place.name}`);
         return imageUrl;
     } else {
         return 'FALLBACK';
@@ -744,7 +757,7 @@ async function tryGeocode(place, searchQuery, cacheKey) {
         });
         
         if (!response.ok) {
-            console.log(`   ⚠️ HTTP ${response.status}`);
+            console.log(`   HTTP ${response.status}`);
             await new Promise(resolve => setTimeout(resolve, 1000)); // Wait before retry
             return false;
         }
@@ -767,9 +780,9 @@ async function tryGeocode(place, searchQuery, cacheKey) {
             // If we have nearby results, use those; otherwise use all results
             if (nearbyResults.length > 0) {
                 filteredResults = nearbyResults;
-                console.log(`   ℹ️ Found ${nearbyResults.length} nearby results`);
+                console.log(`   Found ${nearbyResults.length} nearby results`);
             } else {
-                console.log(`   ℹ️ No nearby results, using ${data.length} total results`);
+                console.log(`   No nearby results, using ${data.length} total results`);
             }
             
             // Find best match (closest to user location from filtered results)
@@ -799,20 +812,20 @@ async function tryGeocode(place, searchQuery, cacheKey) {
             place.latitude = resultLat;
             place.longitude = resultLon;
             
-            console.log(`✅ Found: ${place.name} at (${resultLat.toFixed(4)}, ${resultLon.toFixed(4)}) - ${distanceKm.toFixed(1)}km away`);
+            console.log(`Found: ${place.name} at (${resultLat.toFixed(4)}, ${resultLon.toFixed(4)}) - ${distanceKm.toFixed(1)}km away`);
             
             // Log if the result seems far away
             if (distanceKm > 10) {
-                console.log(`   ⚠️ Warning: Result is ${distanceKm.toFixed(1)}km away (might be in different area)`);
+                console.log(`   Warning: Result is ${distanceKm.toFixed(1)}km away (might be in different area)`);
             }
             
             return true;
         }
         
-        console.log(`   ❌ No results found for: ${searchQuery}`);
+        console.log(`   No results found for: ${searchQuery}`);
         return false;
     } catch (error) {
-        console.error(`   ❌ Error: ${error.message}`);
+        console.error(`   Error: ${error.message}`);
         return false;
     }
 }
@@ -832,13 +845,13 @@ function addMarkerToMap(place) {
     
     // If place is extremely far (>100km), likely bad geocoding - skip it
     if (distanceKm > 100) {
-        console.log(`⚠️ Skipped ${place.name}: Too far away (${distanceKm.toFixed(1)}km) - likely bad geocoding`);
+        console.log(`Skipped ${place.name}: Too far away (${distanceKm.toFixed(1)}km) - likely bad geocoding`);
         return false;
     }
     
     // Check if within walking distance filter
     if (maxWalkingMinutes !== 999 && walkingTimeMinutes > maxWalkingMinutes) {
-        console.log(`⏱️ Filtered out ${place.name}: ${Math.round(walkingTimeMinutes)} min walk (limit: ${maxWalkingMinutes} min) - adjust filter to see it`);
+        console.log(`Filtered out ${place.name}: ${Math.round(walkingTimeMinutes)} min walk (limit: ${maxWalkingMinutes} min) - adjust filter to see it`);
         place.filteredByDistance = true; // Mark as filtered, not failed
         return false;
     }
@@ -857,13 +870,13 @@ function addMarkerToMap(place) {
     marker.on('click', () => showPlaceDetails(place, markerNumber, marker));
     
     markers.push(marker);
-    console.log(`📍 Marker ${markerNumber} added: ${place.name} (${Math.round(walkingTimeMinutes)} min walk, ${distanceKm.toFixed(1)}km)`);
+    console.log(`Marker ${markerNumber} added: ${place.name} (${Math.round(walkingTimeMinutes)} min walk, ${distanceKm.toFixed(1)}km)`);
     return true;
 }
 
 // Re-filter current places when distance filter changes
 function refilterCurrentPlaces() {
-    console.log('🔄 Re-filtering places with new distance...');
+    console.log('Re-filtering places with new distance...');
     
     // Clear existing markers
     markers.forEach(marker => map.removeLayer(marker));
@@ -876,7 +889,7 @@ function refilterCurrentPlaces() {
         }
     }
     
-    console.log(`✅ Filtered: ${markers.length}/${currentPlaces.length} places within ${maxWalkingMinutes === 999 ? 'any' : maxWalkingMinutes + ' min'} walk`);
+    console.log(`Filtered: ${markers.length}/${currentPlaces.length} places within ${maxWalkingMinutes === 999 ? 'any' : maxWalkingMinutes + ' min'} walk`);
     
     // Fit map to show filtered markers
     if (markers.length > 0) {
@@ -1054,7 +1067,7 @@ async function loadPlaceImage(place, imageDiv, number) {
         // Check cache first
         const cachedImage = getCachedImage(place.name);
         if (cachedImage) {
-            console.log('✅ Using cached image for:', place.name);
+            console.log('Using cached image for:', place.name);
             if (cachedImage === 'FALLBACK') {
                 useFallbackIcon(imageDiv, number);
             } else {
@@ -1066,7 +1079,8 @@ async function loadPlaceImage(place, imageDiv, number) {
             return;
         }
         
-        console.log('🔍 Loading image for:', place.name);
+        console.log('Loading image for:', place.name);
+        imageDiv.innerHTML = '<div class="loading-spinner" style="width:30px;height:30px;border-width:3px;"></div>';
         
         // METHOD 0: Try OSM image tag (but validate it's a usable URL)
         let imageUrl = null;
@@ -1077,12 +1091,12 @@ async function loadPlaceImage(place, imageDiv, number) {
             const isValidImageUrl = url.match(/\.(jpg|jpeg|png|gif|webp|bmp)(\?|$)/i);
             
             if (isGooglePhotos) {
-                console.log(`⚠️ Skipping Google Photos link (requires auth): ${place.imageUrl}`);
+                console.log(`Skipping Google Photos link (requires auth): ${place.imageUrl}`);
             } else if (isValidImageUrl || url.includes('wikimedia') || url.includes('wikipedia')) {
-                console.log(`🎯 Using OSM image URL`);
+                console.log(`Using OSM image URL`);
                 imageUrl = place.imageUrl;
             } else {
-                console.log(`⚠️ Skipping non-standard image URL: ${place.imageUrl}`);
+                console.log(`Skipping non-standard image URL: ${place.imageUrl}`);
             }
         }
         
@@ -1093,7 +1107,7 @@ async function loadPlaceImage(place, imageDiv, number) {
         
         // METHOD 2: Try OSM Wikipedia reference
         if (!imageUrl && place.wikipedia) {
-            console.log(`🎯 Using OSM Wikipedia reference: ${place.wikipedia}`);
+            console.log(`Using OSM Wikipedia reference: ${place.wikipedia}`);
             const wikiTitle = place.wikipedia.includes(':') ? place.wikipedia.split(':')[1] : place.wikipedia;
             imageUrl = await tryWikipediaImage(wikiTitle);
         }
@@ -1113,19 +1127,24 @@ async function loadPlaceImage(place, imageDiv, number) {
             imageUrl = await tryWikimediaCommons(place.name, userLocation?.name);
         }
         
-        // METHOD 6: Try Hugging Face image search/generation
-        if (!imageUrl && HUGGINGFACE_API_KEY) {
-            imageUrl = await tryHuggingFaceImage(place);
+        // METHOD 6: Try DuckDuckGo Search (New - Real images)
+        if (!imageUrl) {
+            imageUrl = await tryDuckDuckGoImage(place);
         }
         
-        // METHOD 7: Try Unsplash for generic category images
+        // METHOD 7: Try Together AI Generation (New - High quality fallback)
         if (!imageUrl) {
-            imageUrl = await tryUnsplashImage(place);
+            imageUrl = await tryTogetherAIImage(place);
+        }
+        
+        // METHOD 8: Try Pollinations.ai (Free AI generation fallback)
+        if (!imageUrl) {
+            imageUrl = await tryPollinationsImage(place);
         }
         
         // If we found an image, display it and cache it
         if (imageUrl) {
-            console.log('✅ Found image:', imageUrl);
+            console.log('Found image:', imageUrl);
             imageDiv.style.backgroundImage = `url(${imageUrl})`;
             imageDiv.style.backgroundSize = 'cover';
             imageDiv.style.backgroundPosition = 'center';
@@ -1135,12 +1154,12 @@ async function loadPlaceImage(place, imageDiv, number) {
         }
         
         // Fallback to gradient with icon and cache the fallback status
-        console.log('ℹ️ No image found, using icon');
+        console.log('No image found, using icon');
         useFallbackIcon(imageDiv, number);
         setCachedImage(place.name, 'FALLBACK');
         
     } catch (error) {
-        console.error('❌ Error loading image:', error);
+        console.error('Error loading image:', error);
         useFallbackIcon(imageDiv, number);
         setCachedImage(place.name, 'FALLBACK');
     }
@@ -1167,10 +1186,10 @@ async function tryWikipediaImage(title) {
                 
                 // Check if titles are similar enough (avoiding wrong matches)
                 if (pageTitle.includes(searchTitle.split(',')[0]) || searchTitle.includes(pageTitle)) {
-                    console.log(`✅ Wikipedia match: "${page.title}"`);
+                    console.log(`Wikipedia match: "${page.title}"`);
                     return page.original.source;
                 } else {
-                    console.log(`⚠️ Wikipedia redirect mismatch: searched "${title}" got "${page.title}"`);
+                    console.log(`Wikipedia redirect mismatch: searched "${title}" got "${page.title}"`);
                 }
             }
         }
@@ -1194,7 +1213,7 @@ async function tryWikimediaCommons(placeName, locationName) {
         }
         
         for (const query of searchQueries) {
-            console.log('🔍 Searching Commons for:', query);
+            console.log('Searching Commons for:', query);
             const searchResponse = await fetch(`https://commons.wikimedia.org/w/api.php?action=query&format=json&list=search&srsearch=${encodeURIComponent(query)}&srnamespace=6&srlimit=5&origin=*`);
             const searchData = await searchResponse.json();
             
@@ -1213,12 +1232,12 @@ async function tryWikimediaCommons(placeName, locationName) {
                     
                     // Require at least half the words to match
                     if (matchCount < placeWords.length * 0.5) {
-                        console.log(`⚠️ Skipping weak match: "${imageTitle}"`);
+                        console.log(`Skipping weak match: "${imageTitle}"`);
                         continue;
                     }
                     
                     // Good match - fetch the image
-                    console.log(`✅ Good match: "${imageTitle}"`);
+                    console.log(`Good match: "${imageTitle}"`);
                     const imageResponse = await fetch(`https://commons.wikimedia.org/w/api.php?action=query&format=json&prop=imageinfo&iiprop=url&titles=${encodeURIComponent(imageTitle)}&origin=*`);
                     const imageData = await imageResponse.json();
                     
@@ -1227,7 +1246,7 @@ async function tryWikimediaCommons(placeName, locationName) {
                         const pageId = Object.keys(pages)[0];
                         const imageUrl = pages[pageId]?.imageinfo?.[0]?.url;
                         if (imageUrl) {
-                            console.log('✅ Found Commons image');
+                            console.log('Found Commons image');
                             return imageUrl;
                         }
                     }
@@ -1246,7 +1265,7 @@ async function tryWikimediaCommons(placeName, locationName) {
 // Try to get image from Google Places API
 async function tryGooglePlacesImage(place) {
     try {
-        console.log('🔍 Searching Google Places...');
+        console.log('Searching Google Places...');
         
         // First, find the place
         const searchResponse = await fetch(
@@ -1267,7 +1286,7 @@ async function tryGooglePlacesImage(place) {
             if (photos && photos.length > 0) {
                 const photoReference = photos[0].photo_reference;
                 const photoUrl = `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photo_reference=${photoReference}&key=${GOOGLE_PLACES_API_KEY}`;
-                console.log('✅ Found Google Places image');
+                console.log('Found Google Places image');
                 return photoUrl;
             }
         }
@@ -1280,7 +1299,7 @@ async function tryGooglePlacesImage(place) {
 // Try to get image from Hugging Face - using image search model
 async function tryHuggingFaceImage(place) {
     try {
-        console.log(`🤖 Searching Hugging Face for image of: ${place.name}`);
+        console.log(`Searching Hugging Face for image of: ${place.name}`);
         
         // Create a descriptive prompt for the place
         const prompt = `A high quality photograph of ${place.name} in ${userLocation?.name || 'the city'}, ${place.osmType}, beautiful lighting, professional photography`;
@@ -1309,7 +1328,7 @@ async function tryHuggingFaceImage(place) {
         if (response.ok) {
             const blob = await response.blob();
             const imageUrl = URL.createObjectURL(blob);
-            console.log('✅ Generated Hugging Face image');
+            console.log('Generated Hugging Face image');
             return imageUrl;
         } else {
             const error = await response.text();
@@ -1321,39 +1340,96 @@ async function tryHuggingFaceImage(place) {
     return null;
 }
 
-// Try to get a generic category image from Unsplash
-async function tryUnsplashImage(place) {
+// Try to get image from Pollinations.ai (Free fallback)
+async function tryPollinationsImage(place) {
     try {
-        // Map OSM types to search terms
         const searchTerms = {
-            restaurant: 'restaurant,food,dining',
-            cafe: 'cafe,coffee',
-            museum: 'museum,art,gallery',
-            park: 'park,nature,trees',
-            bar: 'bar,pub,drinks',
-            pub: 'pub,beer',
-            nightclub: 'nightclub,party',
-            theatre: 'theatre,stage',
-            cinema: 'cinema,movie',
-            hotel: 'hotel,resort',
-            attraction: 'landmark,architecture',
-            monument: 'monument,statue',
-            viewpoint: 'landscape,scenic,view',
-            beach: 'beach,ocean',
-            gallery: 'art,gallery,paintings'
+            restaurant: 'restaurant dining interior',
+            cafe: 'coffee shop cafe interior cozy',
+            bar: 'bar pub interior drinks',
+            park: 'beautiful park nature trees',
+            museum: 'museum art gallery interior',
+            church: 'church cathedral architecture',
+            cinema: 'cinema movie theater entrance',
+            hotel: 'luxury hotel room bedroom',
+            attraction: 'tourist attraction landmark',
+            monument: 'monument statue stone',
+            viewpoint: 'scenic landscape view nature',
+            beach: 'beautiful beach ocean sand',
+            gallery: 'art gallery paintings exhibition'
         };
         
-        const searchTerm = searchTerms[place.osmType] || 'landmark';
+        const term = searchTerms[place.osmType] || 'city landmark architecture';
+        const randomSeed = Math.floor(Math.random() * 10000);
         
-        console.log(`�️ Using Unsplash for: ${searchTerm}`);
+        console.log(`Generating Pollinations image for: ${term}`);
         
-        // Use Unsplash Source API - direct URL, no fetch needed (bypasses CORS)
-        // This returns a direct image URL that can be used in <img> or background-image
-        const imageUrl = `https://source.unsplash.com/400x300/?${searchTerm}`;
-        console.log('✅ Generated Unsplash image URL');
+        // Add random seed to prompt to ensure variety
+        const prompt = `professional photography of ${term}, photorealistic, 4k, cinematic lighting, seed ${randomSeed}`;
+        const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=400&height=300&nologo=true&seed=${randomSeed}`;
+        
         return imageUrl;
     } catch (error) {
-        console.log('Unsplash failed:', error);
+        console.log('Pollinations failed:', error);
+    }
+    return null;
+}
+
+// Try to get image from Unsplash - DEPRECATED/UNUSED
+async function tryUnsplashImage(place) {
+    return null;
+}
+
+// Try to get image from DuckDuckGo Search (via backend)
+async function tryDuckDuckGoImage(place) {
+    try {
+        console.log(`Searching DuckDuckGo for: ${place.name}`);
+        
+        const query = `${place.name} ${userLocation?.name || ''} ${place.osmType || ''}`;
+        
+        const response = await fetch(`${API_BASE_URL}/api/search-image`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: query })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success && data.image_url) {
+            console.log('Found DuckDuckGo image');
+            return data.image_url;
+        }
+    } catch (error) {
+        console.log('DuckDuckGo search failed:', error);
+    }
+    return null;
+}
+
+// Try to generate image using Together AI (Flux model)
+async function tryTogetherAIImage(place) {
+    try {
+        console.log(`Generating image with Together AI for: ${place.name}`);
+        
+        const prompt = `A high quality, realistic photograph of ${place.name} in ${userLocation?.name || 'the city'}, ${place.osmType}, beautiful lighting, 4k, professional photography`;
+        
+        const response = await fetch(`${API_BASE_URL}/api/generate-image`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                prompt: prompt,
+                model: 'black-forest-labs/FLUX.1-schnell',
+                steps: 4
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success && data.image_url) {
+            console.log('Generated Together AI image');
+            return data.image_url;
+        }
+    } catch (error) {
+        console.log('Together AI generation failed:', error);
     }
     return null;
 }
@@ -1431,7 +1507,7 @@ function clearCache() {
     cache.recommendations = {};
     cache.images = {};
     cache.geocoding = {};
-    console.log('✅ Cache cleared! Refresh the page.');
+    console.log('Cache cleared! Refresh the page.');
 }
 
 // Expose to window for console access
