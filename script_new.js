@@ -3,6 +3,7 @@ const API_BASE_URL = 'http://localhost:5000';
 const DEFAULT_MODEL = 'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo';
 const CACHE_EXPIRY = 30 * 60 * 1000; // 30 minutes
 const GOOGLE_PLACES_API_KEY = ''; // Optional: Add your Google Places API key for better images
+const HUGGINGFACE_API_KEY = ''; // Optional: Add your Hugging Face API key for AI-generated images
 
 // State
 let userLocation = null;
@@ -362,7 +363,7 @@ async function searchPlacesWithOverpass(category, location) {
     
     const query = osmQueries[category] || osmQueries.landmarks;
     
-    // Overpass QL query - increased limit to 50 for better selection
+    // Overpass QL query - get more results and prioritize places with metadata
     const overpassQuery = `
         [out:json][timeout:25];
         (
@@ -370,7 +371,7 @@ async function searchPlacesWithOverpass(category, location) {
           way${query}(around:${radius},${lat},${lon});
           relation${query}(around:${radius},${lat},${lon});
         );
-        out center 50;
+        out tags center 100;
     `;
     
     console.log(`🔍 Querying Overpass API for ${category}...`);
@@ -408,6 +409,27 @@ async function searchPlacesWithOverpass(category, location) {
             Math.pow((placeLon - lon) * 111, 2)
         );
         
+        // Calculate metadata score (prioritize places with more information)
+        let metadataScore = 0;
+        const hasWikipedia = element.tags.wikipedia || element.tags['wikipedia:en'];
+        const hasWikidata = element.tags.wikidata;
+        const hasImage = element.tags.image;
+        const hasWebsite = element.tags.website;
+        const hasDescription = element.tags.description;
+        
+        // Scoring system (higher = better)
+        if (hasWikipedia) metadataScore += 10; // Wikipedia article = excellent
+        if (hasWikidata) metadataScore += 8;   // Wikidata ID = very good
+        if (hasImage) metadataScore += 6;      // Direct image = good
+        if (hasWebsite) metadataScore += 3;    // Website = some info
+        if (hasDescription) metadataScore += 2; // Description = minimal
+        
+        // Skip places with absolutely no metadata (score 0)
+        if (metadataScore === 0) {
+            console.log(`⚠️ Skipping ${element.tags.name} - no metadata available`);
+            continue;
+        }
+        
         places.push({
             name: element.tags.name,
             latitude: placeLat,
@@ -416,15 +438,27 @@ async function searchPlacesWithOverpass(category, location) {
             descriptionLoaded: false,
             osmType: element.tags.tourism || element.tags.amenity || element.tags.leisure || element.tags.historic || 'place',
             distanceKm: distanceKm,
-            wikidata: element.tags.wikidata || null,  // Store Wikidata ID if available
-            wikipedia: element.tags.wikipedia || null,  // Store Wikipedia reference if available
-            imageUrl: element.tags.image || null  // Store direct image URL from OSM if available
+            wikidata: element.tags.wikidata || null,
+            wikipedia: hasWikipedia ? (element.tags.wikipedia || element.tags['wikipedia:en']) : null,
+            imageUrl: element.tags.image || null,
+            website: element.tags.website || null,
+            metadataScore: metadataScore  // Store score for sorting
         });
     }
     
-    // Sort by distance and return top 12 (increased from 8)
-    places.sort((a, b) => a.distanceKm - b.distanceKm);
-    console.log(`✅ Found ${places.length} places, returning closest 12`);
+    // Sort by metadata quality first, then by distance
+    // This ensures we show well-documented places even if slightly farther
+    places.sort((a, b) => {
+        // If metadata scores are different by more than 3 points, prioritize metadata
+        const scoreDiff = b.metadataScore - a.metadataScore;
+        if (Math.abs(scoreDiff) > 3) {
+            return scoreDiff;
+        }
+        // Otherwise sort by distance
+        return a.distanceKm - b.distanceKm;
+    });
+    
+    console.log(`✅ Found ${places.length} well-documented places, returning top 12`);
     
     return places.slice(0, 12);
 }
@@ -868,17 +902,42 @@ async function showPlaceDetails(place, number, marker) {
     contentDiv.style.cssText = 'padding: 12px; background: #1e293b; color: #f1f5f9; border-radius: 0 0 8px 8px;';
     
     const title = document.createElement('h3');
-    title.style.cssText = 'margin: 0 0 8px 0; font-size: 16px; font-weight: 700;';
-    title.textContent = `${number}. ${place.name}`;
+    title.style.cssText = 'margin: 0 0 8px 0; font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 6px;';
+    title.innerHTML = `${number}. ${place.name}`;
+    
+    // Add verified badge if place has good metadata
+    if (place.wikipedia || place.wikidata) {
+        const verifiedBadge = document.createElement('span');
+        verifiedBadge.style.cssText = 'font-size: 14px;';
+        verifiedBadge.textContent = '✓';
+        verifiedBadge.title = 'Verified - has Wikipedia article';
+        title.appendChild(verifiedBadge);
+    }
+    
     contentDiv.appendChild(title);
+    
+    // Add metadata badges row
+    const badgesRow = document.createElement('div');
+    badgesRow.style.cssText = 'display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap;';
     
     // Add walking time badge
     if (place.walkingMinutes !== undefined) {
         const walkingBadge = document.createElement('div');
-        walkingBadge.style.cssText = 'display: inline-block; background: #6366f1; color: white; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; margin-bottom: 8px;';
+        walkingBadge.style.cssText = 'display: inline-block; background: #6366f1; color: white; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;';
         walkingBadge.textContent = `🚶 ${place.walkingMinutes} min walk • ${place.distanceKm.toFixed(1)} km`;
-        contentDiv.appendChild(walkingBadge);
+        badgesRow.appendChild(walkingBadge);
     }
+    
+    // Add info badge showing available metadata
+    if (place.wikipedia || place.website) {
+        const infoBadge = document.createElement('div');
+        infoBadge.style.cssText = 'display: inline-block; background: #10b981; color: white; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 600;';
+        infoBadge.textContent = '📚 Well-documented';
+        infoBadge.title = 'This place has verified information online';
+        badgesRow.appendChild(infoBadge);
+    }
+    
+    contentDiv.appendChild(badgesRow);
     
     const description = document.createElement('p');
     description.style.cssText = 'margin: 0 0 12px 0; font-size: 13px; line-height: 1.4; color: #94a3b8; max-height: 60px; overflow: hidden;';
@@ -954,11 +1013,22 @@ async function loadPlaceImage(place, imageDiv, number) {
         
         console.log('🔍 Loading image for:', place.name);
         
-        // METHOD 0: Try OSM image tag (direct image URL from OpenStreetMap)
+        // METHOD 0: Try OSM image tag (but validate it's a usable URL)
         let imageUrl = null;
         if (place.imageUrl) {
-            console.log(`🎯 Using OSM image URL`);
-            imageUrl = place.imageUrl;
+            // Check if it's a valid image URL (not Google Photos or other restricted services)
+            const url = place.imageUrl.toLowerCase();
+            const isGooglePhotos = url.includes('photos.app.goo.gl') || url.includes('photos.google.com');
+            const isValidImageUrl = url.match(/\.(jpg|jpeg|png|gif|webp|bmp)(\?|$)/i);
+            
+            if (isGooglePhotos) {
+                console.log(`⚠️ Skipping Google Photos link (requires auth): ${place.imageUrl}`);
+            } else if (isValidImageUrl || url.includes('wikimedia') || url.includes('wikipedia')) {
+                console.log(`🎯 Using OSM image URL`);
+                imageUrl = place.imageUrl;
+            } else {
+                console.log(`⚠️ Skipping non-standard image URL: ${place.imageUrl}`);
+            }
         }
         
         // METHOD 1: Try Google Places API (best for restaurants/cafes)
@@ -988,7 +1058,12 @@ async function loadPlaceImage(place, imageDiv, number) {
             imageUrl = await tryWikimediaCommons(place.name, userLocation?.name);
         }
         
-        // METHOD 6: Try Unsplash for generic category images
+        // METHOD 6: Try Hugging Face image search/generation
+        if (!imageUrl && HUGGINGFACE_API_KEY) {
+            imageUrl = await tryHuggingFaceImage(place);
+        }
+        
+        // METHOD 7: Try Unsplash for generic category images
         if (!imageUrl) {
             imageUrl = await tryUnsplashImage(place);
         }
@@ -1147,43 +1222,83 @@ async function tryGooglePlacesImage(place) {
     return null;
 }
 
+// Try to get image from Hugging Face - using image search model
+async function tryHuggingFaceImage(place) {
+    try {
+        console.log(`🤖 Searching Hugging Face for image of: ${place.name}`);
+        
+        // Create a descriptive prompt for the place
+        const prompt = `A high quality photograph of ${place.name} in ${userLocation?.name || 'the city'}, ${place.osmType}, beautiful lighting, professional photography`;
+        
+        // Option 1: Use Stable Diffusion for generating realistic images
+        // Note: This generates new images, not searches existing ones
+        const response = await fetch(
+            'https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-2-1',
+            {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${HUGGINGFACE_API_KEY}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    inputs: prompt,
+                    parameters: {
+                        negative_prompt: 'blurry, low quality, distorted, text, watermark',
+                        num_inference_steps: 30,
+                        guidance_scale: 7.5
+                    }
+                })
+            }
+        );
+        
+        if (response.ok) {
+            const blob = await response.blob();
+            const imageUrl = URL.createObjectURL(blob);
+            console.log('✅ Generated Hugging Face image');
+            return imageUrl;
+        } else {
+            const error = await response.text();
+            console.log('Hugging Face API error:', error);
+        }
+    } catch (error) {
+        console.log('Hugging Face search failed:', error);
+    }
+    return null;
+}
+
 // Try to get a generic category image from Unsplash
 async function tryUnsplashImage(place) {
     try {
         // Map OSM types to search terms
         const searchTerms = {
-            restaurant: 'restaurant food dining',
-            cafe: 'cafe coffee shop',
-            museum: 'museum art gallery',
-            park: 'park nature green',
-            bar: 'bar pub nightlife',
-            pub: 'bar pub',
-            nightclub: 'nightclub dancing',
-            theatre: 'theatre performance',
-            cinema: 'cinema movie theater',
-            hotel: 'hotel accommodation',
-            attraction: 'tourist attraction landmark',
-            monument: 'monument historic',
-            viewpoint: 'viewpoint scenic vista',
-            beach: 'beach ocean sand'
+            restaurant: 'restaurant,food,dining',
+            cafe: 'cafe,coffee',
+            museum: 'museum,art,gallery',
+            park: 'park,nature,trees',
+            bar: 'bar,pub,drinks',
+            pub: 'pub,beer',
+            nightclub: 'nightclub,party',
+            theatre: 'theatre,stage',
+            cinema: 'cinema,movie',
+            hotel: 'hotel,resort',
+            attraction: 'landmark,architecture',
+            monument: 'monument,statue',
+            viewpoint: 'landscape,scenic,view',
+            beach: 'beach,ocean',
+            gallery: 'art,gallery,paintings'
         };
         
-        const searchTerm = searchTerms[place.osmType] || place.osmType;
+        const searchTerm = searchTerms[place.osmType] || 'landmark';
         
-        console.log(`🔍 Searching Unsplash for: ${searchTerm}`);
+        console.log(`�️ Using Unsplash for: ${searchTerm}`);
         
-        // Use Unsplash's public API (no key needed for basic usage)
-        const response = await fetch(
-            `https://source.unsplash.com/400x300/?${encodeURIComponent(searchTerm)}`,
-            { redirect: 'follow' }
-        );
-        
-        if (response.ok && response.url) {
-            console.log('✅ Found Unsplash image');
-            return response.url;
-        }
+        // Use Unsplash Source API - direct URL, no fetch needed (bypasses CORS)
+        // This returns a direct image URL that can be used in <img> or background-image
+        const imageUrl = `https://source.unsplash.com/400x300/?${searchTerm}`;
+        console.log('✅ Generated Unsplash image URL');
+        return imageUrl;
     } catch (error) {
-        console.log('Unsplash search failed:', error);
+        console.log('Unsplash failed:', error);
     }
     return null;
 }
