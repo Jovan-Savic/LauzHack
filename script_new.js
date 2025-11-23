@@ -2,6 +2,7 @@
 const API_BASE_URL = 'http://localhost:5000';
 const DEFAULT_MODEL = 'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo';
 const CACHE_EXPIRY = 30 * 60 * 1000; // 30 minutes
+const GOOGLE_PLACES_API_KEY = ''; // Optional: Add your Google Places API key for better images
 
 // State
 let userLocation = null;
@@ -341,27 +342,27 @@ async function handleCategorySelect(category) {
 async function searchPlacesWithOverpass(category, location) {
     const lat = location.latitude;
     const lon = location.longitude;
-    const radius = 5000; // 5km radius search
+    const radius = 10000; // 10km radius search (increased from 5km)
     
-    // Map categories to OSM tags
+    // Map categories to OSM tags with better coverage
     const osmQueries = {
-        landmarks: `[tourism~"attraction|monument|artwork|viewpoint"][name]`,
+        landmarks: `[tourism~"attraction|monument|artwork|viewpoint|gallery"][name]`,
         restaurants: `[amenity="restaurant"][name]`,
-        cafes: `[amenity="cafe"][name]`,
-        museums: `[tourism="museum"][name]`,
-        parks: `[leisure~"park|garden"][name]`,
-        shopping: `[shop][name]`,
-        nightlife: `[amenity~"bar|pub|nightclub"][name]`,
-        entertainment: `[amenity~"theatre|cinema|casino"][name]`,
-        hotels: `[tourism~"hotel|hostel"][name]`,
+        cafes: `[amenity~"cafe|coffee_shop"][name]`,
+        museums: `[tourism~"museum|gallery"][name]`,
+        parks: `[leisure~"park|garden|nature_reserve"][name]`,
+        shopping: `[shop~"mall|department_store|supermarket|convenience|clothes|books"][name]`,
+        nightlife: `[amenity~"bar|pub|nightclub|biergarten"][name]`,
+        entertainment: `[amenity~"theatre|cinema|casino|arts_centre"][name]`,
+        hotels: `[tourism~"hotel|hostel|guest_house|motel"][name]`,
         beaches: `[natural~"beach|coastline"][name]`,
-        viewpoints: `[tourism="viewpoint"][name]`,
-        historical: `[historic][name]`
+        viewpoints: `[tourism~"viewpoint|attraction"][natural~"peak|cliff"][name]`,
+        historical: `[historic~"monument|memorial|castle|ruins|archaeological_site|building"][name]`
     };
     
     const query = osmQueries[category] || osmQueries.landmarks;
     
-    // Overpass QL query
+    // Overpass QL query - increased limit to 50 for better selection
     const overpassQuery = `
         [out:json][timeout:25];
         (
@@ -369,7 +370,7 @@ async function searchPlacesWithOverpass(category, location) {
           way${query}(around:${radius},${lat},${lon});
           relation${query}(around:${radius},${lat},${lon});
         );
-        out center 20;
+        out center 50;
     `;
     
     console.log(`🔍 Querying Overpass API for ${category}...`);
@@ -414,15 +415,18 @@ async function searchPlacesWithOverpass(category, location) {
             description: element.tags.description || 'Loading description...',
             descriptionLoaded: false,
             osmType: element.tags.tourism || element.tags.amenity || element.tags.leisure || element.tags.historic || 'place',
-            distanceKm: distanceKm
+            distanceKm: distanceKm,
+            wikidata: element.tags.wikidata || null,  // Store Wikidata ID if available
+            wikipedia: element.tags.wikipedia || null,  // Store Wikipedia reference if available
+            imageUrl: element.tags.image || null  // Store direct image URL from OSM if available
         });
     }
     
-    // Sort by distance and return top 8
+    // Sort by distance and return top 12 (increased from 8)
     places.sort((a, b) => a.distanceKm - b.distanceKm);
-    console.log(`✅ Found ${places.length} places, returning closest 8`);
+    console.log(`✅ Found ${places.length} places, returning closest 12`);
     
-    return places.slice(0, 8);
+    return places.slice(0, 12);
 }
 
 // Enrich places with AI-generated descriptions (background)
@@ -918,11 +922,13 @@ async function showPlaceDetails(place, number, marker) {
     
     popupContent.appendChild(contentDiv);
     
-    // Bind popup to marker and open it
+    // Unbind any existing popup first, then bind fresh popup and open it
+    marker.unbindPopup();
     marker.bindPopup(popupContent, {
         maxWidth: 300,
         className: 'custom-popup'
-    }).openPopup();
+    });
+    marker.openPopup();
     
     // Load image asynchronously in background
     loadPlaceImage(place, imageDiv, number);
@@ -948,17 +954,43 @@ async function loadPlaceImage(place, imageDiv, number) {
         
         console.log('🔍 Loading image for:', place.name);
         
-        // METHOD 1: Try Wikipedia with exact name
-        let imageUrl = await tryWikipediaImage(place.name);
+        // METHOD 0: Try OSM image tag (direct image URL from OpenStreetMap)
+        let imageUrl = null;
+        if (place.imageUrl) {
+            console.log(`🎯 Using OSM image URL`);
+            imageUrl = place.imageUrl;
+        }
         
-        // METHOD 2: Try with location appended
+        // METHOD 1: Try Google Places API (best for restaurants/cafes)
+        if (!imageUrl && GOOGLE_PLACES_API_KEY && place.latitude && place.longitude) {
+            imageUrl = await tryGooglePlacesImage(place);
+        }
+        
+        // METHOD 2: Try OSM Wikipedia reference
+        if (!imageUrl && place.wikipedia) {
+            console.log(`🎯 Using OSM Wikipedia reference: ${place.wikipedia}`);
+            const wikiTitle = place.wikipedia.includes(':') ? place.wikipedia.split(':')[1] : place.wikipedia;
+            imageUrl = await tryWikipediaImage(wikiTitle);
+        }
+        
+        // METHOD 3: Try Wikipedia with exact name
+        if (!imageUrl) {
+            imageUrl = await tryWikipediaImage(place.name);
+        }
+        
+        // METHOD 4: Try with location appended
         if (!imageUrl && userLocation) {
             imageUrl = await tryWikipediaImage(`${place.name}, ${userLocation.name}`);
         }
         
-        // METHOD 3: Try Wikimedia Commons search
+        // METHOD 5: Try Wikimedia Commons search
         if (!imageUrl) {
             imageUrl = await tryWikimediaCommons(place.name, userLocation?.name);
+        }
+        
+        // METHOD 6: Try Unsplash for generic category images
+        if (!imageUrl) {
+            imageUrl = await tryUnsplashImage(place);
         }
         
         // If we found an image, display it and cache it
@@ -984,17 +1016,32 @@ async function loadPlaceImage(place, imageDiv, number) {
     }
 }
 
-// Try to get image from Wikipedia
+// Try to get image from Wikipedia - must be EXACT article match
 async function tryWikipediaImage(title) {
     try {
-        const response = await fetch(`https://en.wikipedia.org/w/api.php?action=query&format=json&prop=pageimages&piprop=original&titles=${encodeURIComponent(title)}&origin=*`);
+        const response = await fetch(`https://en.wikipedia.org/w/api.php?action=query&format=json&prop=pageimages|info&piprop=original&titles=${encodeURIComponent(title)}&origin=*`);
         const data = await response.json();
         
         const pages = data.query?.pages;
         if (pages) {
             const pageId = Object.keys(pages)[0];
-            if (pageId !== '-1' && pages[pageId]?.original?.source) {
-                return pages[pageId].original.source;
+            const page = pages[pageId];
+            
+            // Only use if:
+            // 1. Page exists (not -1)
+            // 2. Has an image
+            // 3. Title matches closely (avoid redirects to wrong places)
+            if (pageId !== '-1' && page?.original?.source) {
+                const pageTitle = page.title.toLowerCase();
+                const searchTitle = title.toLowerCase();
+                
+                // Check if titles are similar enough (avoiding wrong matches)
+                if (pageTitle.includes(searchTitle.split(',')[0]) || searchTitle.includes(pageTitle)) {
+                    console.log(`✅ Wikipedia match: "${page.title}"`);
+                    return page.original.source;
+                } else {
+                    console.log(`⚠️ Wikipedia redirect mismatch: searched "${title}" got "${page.title}"`);
+                }
             }
         }
     } catch (error) {
@@ -1003,35 +1050,56 @@ async function tryWikipediaImage(title) {
     return null;
 }
 
-// Try to get image from Wikimedia Commons
+// Try to get image from Wikimedia Commons - with better filtering
 async function tryWikimediaCommons(placeName, locationName) {
     try {
-        // Search with different queries
+        // Only use very specific queries (avoid generic matches)
         const searchQueries = [
-            `${placeName} ${locationName || ''}`.trim(),
-            placeName,
-            `${placeName} landmark`,
-            `${placeName} building`
+            `${placeName} ${locationName || ''}`.trim()
         ];
+        
+        // If location name exists, prioritize it
+        if (locationName) {
+            searchQueries.unshift(`"${placeName}" ${locationName}`);
+        }
         
         for (const query of searchQueries) {
             console.log('🔍 Searching Commons for:', query);
-            const searchResponse = await fetch(`https://commons.wikimedia.org/w/api.php?action=query&format=json&list=search&srsearch=${encodeURIComponent(query)}&srnamespace=6&srlimit=3&origin=*`);
+            const searchResponse = await fetch(`https://commons.wikimedia.org/w/api.php?action=query&format=json&list=search&srsearch=${encodeURIComponent(query)}&srnamespace=6&srlimit=5&origin=*`);
             const searchData = await searchResponse.json();
             
             if (searchData.query?.search?.length > 0) {
-                // Try first result
-                const imageTitle = searchData.query.search[0].title;
-                const imageResponse = await fetch(`https://commons.wikimedia.org/w/api.php?action=query&format=json&prop=imageinfo&iiprop=url&titles=${encodeURIComponent(imageTitle)}&origin=*`);
-                const imageData = await imageResponse.json();
-                
-                const pages = imageData.query?.pages;
-                if (pages) {
-                    const pageId = Object.keys(pages)[0];
-                    const imageUrl = pages[pageId]?.imageinfo?.[0]?.url;
-                    if (imageUrl) {
-                        console.log('✅ Found Commons image');
-                        return imageUrl;
+                // Check multiple results for better match
+                for (const result of searchData.query.search.slice(0, 3)) {
+                    const imageTitle = result.title;
+                    const snippet = result.snippet?.toLowerCase() || '';
+                    const titleLower = imageTitle.toLowerCase();
+                    
+                    // Verify the result is relevant to our place
+                    const placeWords = placeName.toLowerCase().split(/\s+/);
+                    const matchCount = placeWords.filter(word => 
+                        word.length > 3 && (titleLower.includes(word) || snippet.includes(word))
+                    ).length;
+                    
+                    // Require at least half the words to match
+                    if (matchCount < placeWords.length * 0.5) {
+                        console.log(`⚠️ Skipping weak match: "${imageTitle}"`);
+                        continue;
+                    }
+                    
+                    // Good match - fetch the image
+                    console.log(`✅ Good match: "${imageTitle}"`);
+                    const imageResponse = await fetch(`https://commons.wikimedia.org/w/api.php?action=query&format=json&prop=imageinfo&iiprop=url&titles=${encodeURIComponent(imageTitle)}&origin=*`);
+                    const imageData = await imageResponse.json();
+                    
+                    const pages = imageData.query?.pages;
+                    if (pages) {
+                        const pageId = Object.keys(pages)[0];
+                        const imageUrl = pages[pageId]?.imageinfo?.[0]?.url;
+                        if (imageUrl) {
+                            console.log('✅ Found Commons image');
+                            return imageUrl;
+                        }
                     }
                 }
             }
@@ -1041,6 +1109,81 @@ async function tryWikimediaCommons(placeName, locationName) {
         }
     } catch (error) {
         console.log('Commons search failed:', error);
+    }
+    return null;
+}
+
+// Try to get image from Google Places API
+async function tryGooglePlacesImage(place) {
+    try {
+        console.log('🔍 Searching Google Places...');
+        
+        // First, find the place
+        const searchResponse = await fetch(
+            `https://maps.googleapis.com/maps/api/place/findplacefromtext/json?` +
+            `input=${encodeURIComponent(place.name)}&` +
+            `inputtype=textquery&` +
+            `locationbias=point:${place.latitude},${place.longitude}&` +
+            `fields=place_id,photos&` +
+            `key=${GOOGLE_PLACES_API_KEY}`
+        );
+        
+        const searchData = await searchResponse.json();
+        
+        if (searchData.candidates && searchData.candidates.length > 0) {
+            const placeId = searchData.candidates[0].place_id;
+            const photos = searchData.candidates[0].photos;
+            
+            if (photos && photos.length > 0) {
+                const photoReference = photos[0].photo_reference;
+                const photoUrl = `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photo_reference=${photoReference}&key=${GOOGLE_PLACES_API_KEY}`;
+                console.log('✅ Found Google Places image');
+                return photoUrl;
+            }
+        }
+    } catch (error) {
+        console.log('Google Places search failed:', error);
+    }
+    return null;
+}
+
+// Try to get a generic category image from Unsplash
+async function tryUnsplashImage(place) {
+    try {
+        // Map OSM types to search terms
+        const searchTerms = {
+            restaurant: 'restaurant food dining',
+            cafe: 'cafe coffee shop',
+            museum: 'museum art gallery',
+            park: 'park nature green',
+            bar: 'bar pub nightlife',
+            pub: 'bar pub',
+            nightclub: 'nightclub dancing',
+            theatre: 'theatre performance',
+            cinema: 'cinema movie theater',
+            hotel: 'hotel accommodation',
+            attraction: 'tourist attraction landmark',
+            monument: 'monument historic',
+            viewpoint: 'viewpoint scenic vista',
+            beach: 'beach ocean sand'
+        };
+        
+        const searchTerm = searchTerms[place.osmType] || place.osmType;
+        
+        console.log(`🔍 Searching Unsplash for: ${searchTerm}`);
+        
+        // Use Unsplash's public API (no key needed for basic usage)
+        const response = await fetch(
+            `https://source.unsplash.com/400x300/?${encodeURIComponent(searchTerm)}`,
+            { redirect: 'follow' }
+        );
+        
+        if (response.ok && response.url) {
+            console.log('✅ Found Unsplash image');
+            return response.url;
+        }
+    } catch (error) {
+        console.log('Unsplash search failed:', error);
     }
     return null;
 }
