@@ -8,6 +8,7 @@ let userLocation = null;
 let map = null;
 let markers = [];
 let currentPlaces = [];
+let maxWalkingMinutes = 5; // Default 5 minutes walking distance
 
 // Cache storage
 const cache = {
@@ -65,6 +66,24 @@ function setupEventListeners() {
     // Close details panel
     closeDetails.addEventListener('click', () => {
         detailsPanel.classList.remove('active');
+    });
+    
+    // Distance filter buttons
+    document.querySelectorAll('.distance-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            // Update active state
+            document.querySelectorAll('.distance-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            
+            // Update max walking distance
+            maxWalkingMinutes = parseInt(btn.dataset.distance);
+            console.log(`🚶 Walking distance filter: ${maxWalkingMinutes === 999 ? 'Any' : maxWalkingMinutes + ' min'}`);
+            
+            // If places are already loaded, re-filter them
+            if (currentPlaces.length > 0 && markers.length > 0) {
+                refilterCurrentPlaces();
+            }
+        });
     });
 }
 
@@ -277,247 +296,394 @@ async function handleCategorySelect(category) {
     });
     event.target.closest('.category-btn').classList.add('active');
     
-    // Check cache first
+    // Check cache first - but validate it's not empty
     const cached = getCachedRecommendations(category, userLocation.name);
-    if (cached) {
+    if (cached && cached.length > 0) {
+        console.log(`📦 Using ${cached.length} cached places`);
         displayPlacesOnMap(cached, category);
         return;
+    } else if (cached && cached.length === 0) {
+        console.log(`⚠️ Cache has 0 places, fetching fresh data...`);
+        // Clear this bad cache entry
+        const key = `${category}-${userLocation.name}`;
+        delete cache.recommendations[key];
+        saveCacheToStorage();
     }
     
-    showLoading(`Finding ${category} near you...`);
+    showLoading(`Searching for ${category} near you...`);
     
-    // Build simplified prompt for just place names
-    const prompts = {
-        landmarks: `List exactly 8 famous landmarks and monuments in ${userLocation.name}. Format: 1. Name\n2. Name\n etc.`,
-        restaurants: `List exactly 8 popular restaurants in ${userLocation.name}. Format: 1. Name\n2. Name\n etc.`,
-        cafes: `List exactly 8 popular cafés and coffee shops in ${userLocation.name}. Format: 1. Name\n2. Name\n etc.`,
-        museums: `List exactly 8 museums and art galleries in ${userLocation.name}. Format: 1. Name\n2. Name\n etc.`,
-        parks: `List exactly 8 parks and green spaces in ${userLocation.name}. Format: 1. Name\n2. Name\n etc.`,
-        shopping: `List exactly 8 shopping centers and markets in ${userLocation.name}. Format: 1. Name\n2. Name\n etc.`,
-        nightlife: `List exactly 8 nightlife venues and bars in ${userLocation.name}. Format: 1. Name\n2. Name\n etc.`,
-        entertainment: `List exactly 8 entertainment venues in ${userLocation.name}. Format: 1. Name\n2. Name\n etc.`,
-        hotels: `List exactly 8 notable hotels in ${userLocation.name}. Format: 1. Name\n2. Name\n etc.`,
-        beaches: `List exactly 8 beaches and waterfront areas in or near ${userLocation.name}. Format: 1. Name\n2. Name\n etc.`,
-        viewpoints: `List exactly 8 viewpoints and scenic spots in ${userLocation.name}. Format: 1. Name\n2. Name\n etc.`,
-        historical: `List exactly 8 historical sites and buildings in ${userLocation.name}. Format: 1. Name\n2. Name\n etc.`
-    };
-    
-    const prompt = prompts[category] || prompts.landmarks;
-    
+    // Use Overpass API to find real places from OpenStreetMap
     try {
-        // Get place names from AI
-        const response = await fetch(`${API_BASE_URL}/api/generate`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                prompt: prompt,
-                model: DEFAULT_MODEL,
-                max_tokens: 512,
-                temperature: 0.7
-            })
-        });
+        const places = await searchPlacesWithOverpass(category, userLocation);
         
-        const data = await response.json();
-        
-        if (data.success) {
-            const placeNames = parseSimplePlaceNames(data.response);
-            const places = placeNames.map(name => ({ 
-                name, 
-                description: 'Loading description...',
-                descriptionLoaded: false
-            }));
-            
-            setCachedRecommendations(category, userLocation.name, places);
-            displayPlacesOnMap(places, category);
+        if (places.length === 0) {
             hideLoading();
-            
-            // Load descriptions in background
-            loadDescriptionsInBackground(places, category);
-        } else {
-            hideLoading();
-            alert('Error getting recommendations. Please try again.');
+            alert(`No ${category} found nearby.\n\nTry:\n• Different category\n• Increasing distance filter`);
+            return;
         }
+        
+        console.log(`🗺️ Found ${places.length} places from OpenStreetMap`);
+        
+        // Get descriptions from LLM in background
+        enrichPlacesWithDescriptions(places, category);
+        
+        // Display immediately with coordinates already from OSM
+        displayPlacesWithParallelProcessing(places, category);
+        
     } catch (error) {
         hideLoading();
         console.error('Error:', error);
-        alert('Error connecting to server. Make sure the backend is running.');
+        alert('Error searching for places. Please try again.');
     }
 }
 
-// Parse simple place names from AI response
-function parseSimplePlaceNames(text) {
-    const names = [];
-    const lines = text.split('\n');
+// Search for places using Overpass API
+async function searchPlacesWithOverpass(category, location) {
+    const lat = location.latitude;
+    const lon = location.longitude;
+    const radius = 5000; // 5km radius search
     
-    for (const line of lines) {
-        // Match patterns like "1. Place Name" or "- Place Name" or "* Place Name"
-        const match = line.match(/^[\d\-\*\•]+[\.\):\s]+(.+?)$/);
-        if (match && match[1].trim()) {
-            const name = match[1].trim()
-                .replace(/\*\*/g, '') // Remove markdown bold
-                .replace(/^["']|["']$/g, '') // Remove quotes
-                .split(/[-–—:]/)[0] // Take only part before dash or colon
-                .trim();
-            if (name.length > 2 && name.length < 100) {
-                names.push(name);
-            }
-        }
-    }
-    
-    return names.slice(0, 8); // Ensure max 8 places
-}
-
-// Load descriptions for places in background
-async function loadDescriptionsInBackground(places, category) {
-    console.log('📝 Loading descriptions in background...');
-    
-    const descPrompts = {
-        landmarks: (name) => `Describe ${name} in ${userLocation.name} in 2 sentences. Focus on what makes it special.`,
-        restaurants: (name) => `Describe ${name} restaurant in ${userLocation.name} in 2 sentences. Include cuisine type.`,
-        cafes: (name) => `Describe ${name} café in ${userLocation.name} in 2 sentences. Include atmosphere.`,
-        museums: (name) => `Describe ${name} museum in ${userLocation.name} in 2 sentences. What does it feature?`,
-        parks: (name) => `Describe ${name} park in ${userLocation.name} in 2 sentences.`,
-        shopping: (name) => `Describe ${name} shopping in ${userLocation.name} in 2 sentences.`,
-        nightlife: (name) => `Describe ${name} venue in ${userLocation.name} in 2 sentences.`,
-        entertainment: (name) => `Describe ${name} entertainment venue in ${userLocation.name} in 2 sentences.`,
-        hotels: (name) => `Describe ${name} hotel in ${userLocation.name} in 2 sentences.`,
-        beaches: (name) => `Describe ${name} beach in ${userLocation.name} in 2 sentences.`,
-        viewpoints: (name) => `Describe ${name} viewpoint in ${userLocation.name} in 2 sentences.`,
-        historical: (name) => `Describe ${name} historical site in ${userLocation.name} in 2 sentences.`
+    // Map categories to OSM tags
+    const osmQueries = {
+        landmarks: `[tourism~"attraction|monument|artwork|viewpoint"][name]`,
+        restaurants: `[amenity="restaurant"][name]`,
+        cafes: `[amenity="cafe"][name]`,
+        museums: `[tourism="museum"][name]`,
+        parks: `[leisure~"park|garden"][name]`,
+        shopping: `[shop][name]`,
+        nightlife: `[amenity~"bar|pub|nightclub"][name]`,
+        entertainment: `[amenity~"theatre|cinema|casino"][name]`,
+        hotels: `[tourism~"hotel|hostel"][name]`,
+        beaches: `[natural~"beach|coastline"][name]`,
+        viewpoints: `[tourism="viewpoint"][name]`,
+        historical: `[historic][name]`
     };
     
-    const getPrompt = descPrompts[category] || descPrompts.landmarks;
+    const query = osmQueries[category] || osmQueries.landmarks;
     
-    for (const place of places) {
-        if (place.descriptionLoaded) continue;
-        
-        try {
-            const response = await fetch(`${API_BASE_URL}/api/generate`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    prompt: getPrompt(place.name),
-                    model: DEFAULT_MODEL,
-                    max_tokens: 150,
-                    temperature: 0.7
-                })
-            });
-            
-            const data = await response.json();
-            
-            if (data.success) {
-                place.description = data.response.trim();
-                place.descriptionLoaded = true;
-                console.log(`✅ Loaded description for: ${place.name}`);
-            }
-        } catch (error) {
-            console.error(`❌ Failed to load description for ${place.name}:`, error);
-        }
-        
-        // Small delay between requests
-        await new Promise(resolve => setTimeout(resolve, 500));
-    }
+    // Overpass QL query
+    const overpassQuery = `
+        [out:json][timeout:25];
+        (
+          node${query}(around:${radius},${lat},${lon});
+          way${query}(around:${radius},${lat},${lon});
+          relation${query}(around:${radius},${lat},${lon});
+        );
+        out center 20;
+    `;
     
-    // Update cache with descriptions
-    setCachedRecommendations(category, userLocation.name, places);
-    console.log('✅ All descriptions loaded');
-}
-
-// Parse attractions from AI response
-function parseAttractions(text) {
-    const attractions = [];
-    const pattern = /\d+\.\s*\*\*([^*]+)\*\*[\s:-]+([^\n]+)/g;
-    const matches = [...text.matchAll(pattern)];
+    console.log(`🔍 Querying Overpass API for ${category}...`);
     
-    matches.forEach(match => {
-        const name = match[1].trim();
-        const description = match[2].trim();
-        if (name.length > 2) {
-            attractions.push({ name, description });
-        }
+    const response = await fetch('https://overpass-api.de/api/interpreter', {
+        method: 'POST',
+        body: overpassQuery
     });
     
-    return attractions;
+    if (!response.ok) {
+        throw new Error(`Overpass API error: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    const places = [];
+    
+    for (const element of data.elements) {
+        if (!element.tags || !element.tags.name) continue;
+        
+        // Get coordinates (handle nodes vs ways/relations)
+        let placeLat, placeLon;
+        if (element.type === 'node') {
+            placeLat = element.lat;
+            placeLon = element.lon;
+        } else if (element.center) {
+            placeLat = element.center.lat;
+            placeLon = element.center.lon;
+        } else {
+            continue;
+        }
+        
+        // Calculate distance
+        const distanceKm = Math.sqrt(
+            Math.pow((placeLat - lat) * 111, 2) +
+            Math.pow((placeLon - lon) * 111, 2)
+        );
+        
+        places.push({
+            name: element.tags.name,
+            latitude: placeLat,
+            longitude: placeLon,
+            description: element.tags.description || 'Loading description...',
+            descriptionLoaded: false,
+            osmType: element.tags.tourism || element.tags.amenity || element.tags.leisure || element.tags.historic || 'place',
+            distanceKm: distanceKm
+        });
+    }
+    
+    // Sort by distance and return top 8
+    places.sort((a, b) => a.distanceKm - b.distanceKm);
+    console.log(`✅ Found ${places.length} places, returning closest 8`);
+    
+    return places.slice(0, 8);
 }
 
-// Display places on map with markers
-async function displayPlacesOnMap(places, category) {
+// Enrich places with AI-generated descriptions (background)
+async function enrichPlacesWithDescriptions(places, category) {
+    console.log('📝 Enriching places with AI descriptions in background...');
+    
+    setTimeout(async () => {
+        for (const place of places) {
+            if (place.descriptionLoaded) continue;
+            
+            try {
+                const prompt = `Describe ${place.name} in ${userLocation.name} in 1-2 sentences. What makes it special or interesting?`;
+                
+                const response = await fetch(`${API_BASE_URL}/api/generate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        prompt: prompt,
+                        model: DEFAULT_MODEL,
+                        max_tokens: 100,
+                        temperature: 0.7
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    place.description = data.response.trim();
+                    place.descriptionLoaded = true;
+                    console.log(`✅ Enriched: ${place.name}`);
+                }
+            } catch (error) {
+                console.error(`Failed to enrich ${place.name}:`, error);
+                place.description = `A ${place.osmType} in ${userLocation.name}.`;
+                place.descriptionLoaded = true;
+            }
+            
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        
+        console.log('✅ All descriptions enriched');
+    }, 1000); // Start after 1 second to not block display
+}
+
+// Parse places with descriptions from AI response (kept for backward compatibility)
+function parseAttractionsWithDescriptions(text) {
+    const attractions = [];
+    
+    console.log('📄 Parsing AI response...');
+    
+    // Pattern 1: "1. **Name** - Description"
+    const pattern1 = /\d+\.\s*\*\*([^*]+)\*\*[\s\-–—:]+([^\n]+)/g;
+    let matches = [...text.matchAll(pattern1)];
+    
+    if (matches.length > 0) {
+        console.log(`✓ Pattern 1 matched: ${matches.length} entries`);
+        matches.forEach(match => {
+            const name = match[1].trim();
+            const description = match[2].trim();
+            if (name.length > 2 && description.length > 5) {
+                attractions.push({ name, description, descriptionLoaded: true });
+            }
+        });
+    } else {
+        console.log('✓ Trying Pattern 2...');
+        // Pattern 2: Try simpler format "1. Name - Description"
+        const lines = text.split('\n');
+        for (const line of lines) {
+            // Match various formats
+            let match = line.match(/^(\d+)[\.\)]\s*\*\*([^*]+)\*\*\s*[-–—:]\s*(.+)$/);
+            if (!match) {
+                match = line.match(/^(\d+)[\.\)]\s*([^-–—:]+)\s*[-–—:]\s*(.+)$/);
+            }
+            
+            if (match && match[2] && match[3]) {
+                const name = match[2].trim().replace(/\*\*/g, '');
+                const description = match[3].trim();
+                if (name.length > 2 && description.length > 5 && !name.toLowerCase().includes('name:')) {
+                    attractions.push({ name, description, descriptionLoaded: true });
+                }
+            }
+        }
+        console.log(`✓ Pattern 2 matched: ${attractions.length} entries`);
+    }
+    
+    if (attractions.length === 0) {
+        console.error('❌ Failed to parse any attractions from response:');
+        console.error(text.substring(0, 500)); // Show first 500 chars
+    }
+    
+    console.log(`📝 Successfully parsed ${attractions.length} places with descriptions`);
+    return attractions.slice(0, 8); // Ensure max 8 places
+}
+
+// Display places with parallel geocoding and image loading
+async function displayPlacesWithParallelProcessing(places, category) {
+    currentPlaces = places;
+    
+    console.log(`� Starting parallel processing for ${places.length} places...`);
+    showLoading('Geocoding locations...');
+    
     // Clear existing markers
     markers.forEach(marker => map.removeLayer(marker));
     markers = [];
-    currentPlaces = places;
     
-    showLoading('Adding markers to map...');
+    // Phase 1: Geocode all places in parallel batches
+    const batchSize = 3; // Process 3 at a time to avoid rate limits
+    const geocodedPlaces = [];
     
-    const failedPlaces = [];
+    for (let i = 0; i < places.length; i += batchSize) {
+        const batch = places.slice(i, i + batchSize);
+        const batchPromises = batch.map(place => geocodePlaceParallel(place, category));
+        
+        const results = await Promise.all(batchPromises);
+        geocodedPlaces.push(...results.filter(p => p !== null));
+        
+        // Update progress
+        showLoading(`Geocoded ${Math.min(i + batchSize, places.length)}/${places.length} places...`);
+        
+        // Small delay between batches
+        await new Promise(resolve => setTimeout(resolve, 500));
+    }
     
-    // FIRST PASS: Try to geocode each place once
-    for (let i = 0; i < places.length; i++) {
-        const place = places[i];
-        const query = `${place.name}, ${userLocation.name}`;
-        
-        console.log(`🔍 [Pass 1] ${i + 1}/${places.length}: ${place.name}`);
-        
-        // Check cache first
-        let cachedGeocode = getCachedGeocode(query);
-        
-        if (cachedGeocode) {
-            place.latitude = cachedGeocode.lat;
-            place.longitude = cachedGeocode.lon;
-            console.log(`✅ Used cache for: ${place.name}`);
-        } else {
-            // Try geocoding once with primary query
-            const success = await tryGeocode(place, `${place.name}, ${userLocation.name}`, query);
-            
-            if (!success) {
-                console.log(`⚠️ First attempt failed: ${place.name}`);
-                failedPlaces.push(place);
-            }
-        }
-        
-        // Add marker if coordinates found
+    console.log(`✅ Geocoded ${geocodedPlaces.length}/${places.length} places`);
+    
+    // Phase 2: Add all markers to map immediately
+    hideLoading();
+    
+    for (const place of geocodedPlaces) {
         if (place.latitude && place.longitude) {
             addMarkerToMap(place);
         }
-        
-        // Small delay to avoid rate limiting
-        await new Promise(resolve => setTimeout(resolve, 200));
     }
     
-    console.log(`📊 First pass complete: ${markers.length}/${places.length} markers`);
+    console.log(`📍 Added ${markers.length} markers to map`);
     
-    // SECOND PASS: Retry failed places with alternative queries
-    if (failedPlaces.length > 0) {
-        console.log(`🔄 Retrying ${failedPlaces.length} failed places...`);
-        
-        for (const place of failedPlaces) {
-            console.log(`🔍 [Pass 2] Retrying: ${place.name}`);
-            
-            const query = `${place.name}, ${userLocation.name}`;
-            
-            // Try alternative query
-            const success = await tryGeocode(place, place.name, query) || 
-                           await tryGeocode(place, `${place.name} ${category}`, query);
-            
-            if (success && place.latitude && place.longitude) {
-                addMarkerToMap(place);
-            } else {
-                console.log(`❌ Failed after retry: ${place.name}`);
-            }
-            
-            await new Promise(resolve => setTimeout(resolve, 300));
-        }
+    // Check if places were filtered by distance
+    const filteredCount = geocodedPlaces.filter(p => p.filteredByDistance).length;
+    
+    if (markers.length === 0 && filteredCount > 0) {
+        // All places were filtered out by distance
+        alert(`All ${filteredCount} places are beyond your ${maxWalkingMinutes} min walking distance.\n\nTry:\n• Increasing the distance filter (10 min or 30 min)\n• Selecting "Any" distance\n\nThe closest place is ${Math.round(geocodedPlaces[0].walkingMinutes)} minutes away.`);
+        console.log(`⚠️ All places filtered by distance. Closest: ${geocodedPlaces[0].name} at ${geocodedPlaces[0].walkingMinutes} min`);
+    } else if (markers.length === 0) {
+        alert('Could not find locations for any places. Try a different category or location.');
     }
-    
-    hideLoading();
-    
-    console.log(`✅ Total markers displayed: ${markers.length}/${places.length}`);
     
     // Fit map to show all markers
     if (markers.length > 0) {
         const group = new L.featureGroup(markers);
         map.fitBounds(group.getBounds().pad(0.1));
     }
+    
+    // Phase 3: Load images in background (non-blocking)
+    console.log(`🖼️ Starting background image loading...`);
+    loadAllImagesInBackground(geocodedPlaces);
+}
+
+// Geocode a single place (parallel-safe)
+async function geocodePlaceParallel(place, category) {
+    const query = `${place.name}, ${userLocation.name}`;
+    
+    console.log(`🔍 Geocoding: ${place.name}`);
+    
+    // Try geocoding with multiple queries prioritizing local results
+    const queries = [
+        `${place.name}, ${userLocation.name}`,
+        `${place.name} near ${userLocation.name}`,
+        `${place.name} ${category} ${userLocation.name}`,
+        place.name
+    ];
+    
+    for (const searchQuery of queries) {
+        if (!searchQuery || searchQuery.length < 3) continue;
+        
+        const success = await tryGeocodeWithDistanceCheck(place, searchQuery, query, 50); // 50km max
+        if (success) {
+            console.log(`✅ Geocoded within range: ${place.name}`);
+            return place;
+        }
+        
+        // Small delay between attempts
+        await new Promise(resolve => setTimeout(resolve, 300));
+    }
+    
+    console.log(`❌ Failed to find ${place.name} within 50km`);
+    return null;
+}
+
+// Try to geocode with distance validation
+async function tryGeocodeWithDistanceCheck(place, searchQuery, cacheKey, maxDistanceKm) {
+    const result = await tryGeocode(place, searchQuery, cacheKey);
+    
+    if (result && place.latitude && place.longitude) {
+        // Calculate distance
+        const distanceKm = Math.sqrt(
+            Math.pow((place.latitude - userLocation.latitude) * 111, 2) +
+            Math.pow((place.longitude - userLocation.longitude) * 111, 2)
+        );
+        
+        // Reject if too far
+        if (distanceKm > maxDistanceKm) {
+            console.log(`   ❌ Rejected: ${distanceKm.toFixed(1)}km away (max: ${maxDistanceKm}km)`);
+            place.latitude = null;
+            place.longitude = null;
+            return false;
+        }
+        
+        return true;
+    }
+    
+    return false;
+}
+
+// Load images for all places in background
+async function loadAllImagesInBackground(places) {
+    for (const place of places) {
+        if (!place.latitude || !place.longitude) continue;
+        
+        // Pre-load images into cache (doesn't display yet)
+        try {
+            await loadImageToCache(place);
+        } catch (error) {
+            console.error(`Failed to load image for ${place.name}:`, error);
+        }
+        
+        // Small delay between image requests
+        await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    
+    console.log(`✅ Background image loading complete`);
+}
+
+// Load image and cache it (doesn't display)
+async function loadImageToCache(place) {
+    console.log(`🖼️ Loading image for: ${place.name}`);
+    
+    // Try Wikipedia
+    let imageUrl = await tryWikipediaImage(place.name);
+    
+    if (!imageUrl && userLocation) {
+        imageUrl = await tryWikipediaImage(`${place.name}, ${userLocation.name}`);
+    }
+    
+    // Try Wikimedia Commons
+    if (!imageUrl) {
+        imageUrl = await tryWikimediaCommons(place.name, userLocation?.name);
+    }
+    
+    if (imageUrl) {
+        console.log(`✅ Found image: ${place.name}`);
+        return imageUrl;
+    } else {
+        return 'FALLBACK';
+    }
+}
+
+// Display places on map with markers (fallback for cached data)
+async function displayPlacesOnMap(places, category) {
+    // Use the new parallel processing function
+    displayPlacesWithParallelProcessing(places, category);
 }
 
 // Try to geocode a place with a specific query
@@ -525,17 +691,15 @@ async function tryGeocode(place, searchQuery, cacheKey) {
     try {
         const lat = userLocation.latitude;
         const lon = userLocation.longitude;
-        const radius = 0.5; // ~50km search radius
-        const viewbox = `${lon - radius},${lat + radius},${lon + radius},${lat - radius}`;
         
+        // Build URL with proximity bias but not bounded (to find places even outside immediate area)
         const url = `https://nominatim.openstreetmap.org/search?` +
             `format=json` +
             `&q=${encodeURIComponent(searchQuery)}` +
-            `&limit=10` +
-            `&viewbox=${viewbox}` +
-            `&bounded=1` +
-            `&lat=${lat}` +
-            `&lon=${lon}`;
+            `&limit=20` + // Increased limit for better results
+            `&addressdetails=1` +
+            `&extratags=1` +
+            `&namedetails=1`;
         
         const response = await fetch(url, {
             headers: { 'User-Agent': 'LocalDiscoveryApp/1.0' }
@@ -543,20 +707,41 @@ async function tryGeocode(place, searchQuery, cacheKey) {
         
         if (!response.ok) {
             console.log(`   ⚠️ HTTP ${response.status}`);
+            await new Promise(resolve => setTimeout(resolve, 1000)); // Wait before retry
             return false;
         }
         
         const data = await response.json();
         
         if (data && data.length > 0) {
-            // Find best match (prefer results closer to user location)
-            let bestMatch = data[0];
+            // Filter results to prefer places in the same country/region
+            let filteredResults = data;
+            
+            // Try to find results within reasonable distance first (50km)
+            const nearbyResults = data.filter(result => {
+                const distance = Math.sqrt(
+                    Math.pow(parseFloat(result.lat) - lat, 2) +
+                    Math.pow(parseFloat(result.lon) - lon, 2)
+                ) * 111; // Convert to km
+                return distance < 50;
+            });
+            
+            // If we have nearby results, use those; otherwise use all results
+            if (nearbyResults.length > 0) {
+                filteredResults = nearbyResults;
+                console.log(`   ℹ️ Found ${nearbyResults.length} nearby results`);
+            } else {
+                console.log(`   ℹ️ No nearby results, using ${data.length} total results`);
+            }
+            
+            // Find best match (closest to user location from filtered results)
+            let bestMatch = filteredResults[0];
             let minDistance = Infinity;
             
-            for (const result of data) {
+            for (const result of filteredResults) {
                 const distance = Math.sqrt(
-                    Math.pow(parseFloat(result.lat) - userLocation.latitude, 2) +
-                    Math.pow(parseFloat(result.lon) - userLocation.longitude, 2)
+                    Math.pow(parseFloat(result.lat) - lat, 2) +
+                    Math.pow(parseFloat(result.lon) - lon, 2)
                 );
                 if (distance < minDistance) {
                     minDistance = distance;
@@ -569,19 +754,24 @@ async function tryGeocode(place, searchQuery, cacheKey) {
             
             // Calculate distance in km
             const distanceKm = Math.sqrt(
-                Math.pow((resultLat - userLocation.latitude) * 111, 2) +
-                Math.pow((resultLon - userLocation.longitude) * 111, 2)
+                Math.pow((resultLat - lat) * 111, 2) +
+                Math.pow((resultLon - lon) * 111, 2)
             );
             
             place.latitude = resultLat;
             place.longitude = resultLon;
             
-            // Cache the result
-            setCachedGeocode(cacheKey, resultLat, resultLon);
-            console.log(`✅ Found: ${place.name} (${distanceKm.toFixed(1)}km away)`);
+            console.log(`✅ Found: ${place.name} at (${resultLat.toFixed(4)}, ${resultLon.toFixed(4)}) - ${distanceKm.toFixed(1)}km away`);
+            
+            // Log if the result seems far away
+            if (distanceKm > 10) {
+                console.log(`   ⚠️ Warning: Result is ${distanceKm.toFixed(1)}km away (might be in different area)`);
+            }
+            
             return true;
         }
         
+        console.log(`   ❌ No results found for: ${searchQuery}`);
         return false;
     } catch (error) {
         console.error(`   ❌ Error: ${error.message}`);
@@ -591,6 +781,30 @@ async function tryGeocode(place, searchQuery, cacheKey) {
 
 // Add a marker to the map for a place
 function addMarkerToMap(place) {
+    // Calculate walking distance in km (average walking speed: 5 km/h)
+    const distanceKm = Math.sqrt(
+        Math.pow((place.latitude - userLocation.latitude) * 111, 2) +
+        Math.pow((place.longitude - userLocation.longitude) * 111, 2)
+    );
+    
+    // Calculate walking time in minutes
+    const walkingTimeMinutes = (distanceKm / 5) * 60;
+    place.walkingMinutes = Math.round(walkingTimeMinutes);
+    place.distanceKm = distanceKm;
+    
+    // If place is extremely far (>100km), likely bad geocoding - skip it
+    if (distanceKm > 100) {
+        console.log(`⚠️ Skipped ${place.name}: Too far away (${distanceKm.toFixed(1)}km) - likely bad geocoding`);
+        return false;
+    }
+    
+    // Check if within walking distance filter
+    if (maxWalkingMinutes !== 999 && walkingTimeMinutes > maxWalkingMinutes) {
+        console.log(`⏱️ Filtered out ${place.name}: ${Math.round(walkingTimeMinutes)} min walk (limit: ${maxWalkingMinutes} min) - adjust filter to see it`);
+        place.filteredByDistance = true; // Mark as filtered, not failed
+        return false;
+    }
+    
     const markerNumber = markers.length + 1;
     place.markerNumber = markerNumber;
     
@@ -605,7 +819,32 @@ function addMarkerToMap(place) {
     marker.on('click', () => showPlaceDetails(place, markerNumber, marker));
     
     markers.push(marker);
-    console.log(`📍 Marker ${markerNumber} added: ${place.name}`);
+    console.log(`📍 Marker ${markerNumber} added: ${place.name} (${Math.round(walkingTimeMinutes)} min walk, ${distanceKm.toFixed(1)}km)`);
+    return true;
+}
+
+// Re-filter current places when distance filter changes
+function refilterCurrentPlaces() {
+    console.log('🔄 Re-filtering places with new distance...');
+    
+    // Clear existing markers
+    markers.forEach(marker => map.removeLayer(marker));
+    markers = [];
+    
+    // Re-add markers that pass the distance filter
+    for (const place of currentPlaces) {
+        if (place.latitude && place.longitude) {
+            addMarkerToMap(place);
+        }
+    }
+    
+    console.log(`✅ Filtered: ${markers.length}/${currentPlaces.length} places within ${maxWalkingMinutes === 999 ? 'any' : maxWalkingMinutes + ' min'} walk`);
+    
+    // Fit map to show filtered markers
+    if (markers.length > 0) {
+        const group = new L.featureGroup(markers);
+        map.fitBounds(group.getBounds().pad(0.1));
+    }
 }
 
 // Show place details in popup next to marker
@@ -628,6 +867,14 @@ async function showPlaceDetails(place, number, marker) {
     title.style.cssText = 'margin: 0 0 8px 0; font-size: 16px; font-weight: 700;';
     title.textContent = `${number}. ${place.name}`;
     contentDiv.appendChild(title);
+    
+    // Add walking time badge
+    if (place.walkingMinutes !== undefined) {
+        const walkingBadge = document.createElement('div');
+        walkingBadge.style.cssText = 'display: inline-block; background: #6366f1; color: white; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; margin-bottom: 8px;';
+        walkingBadge.textContent = `🚶 ${place.walkingMinutes} min walk • ${place.distanceKm.toFixed(1)} km`;
+        contentDiv.appendChild(walkingBadge);
+    }
     
     const description = document.createElement('p');
     description.style.cssText = 'margin: 0 0 12px 0; font-size: 13px; line-height: 1.4; color: #94a3b8; max-height: 60px; overflow: hidden;';
@@ -816,76 +1063,42 @@ function hideLoading() {
     loadingOverlay.classList.add('hidden');
 }
 
-// Cache management
+// Cache management - disabled per user request
 function loadCacheFromStorage() {
-    try {
-        const stored = localStorage.getItem('locationAppCache');
-        if (stored) {
-            const parsed = JSON.parse(stored);
-            Object.assign(cache, parsed);
-            console.log('✅ Cache loaded from storage');
-        }
-    } catch (error) {
-        console.error('Failed to load cache:', error);
-    }
+    // Caching disabled
 }
 
 function saveCacheToStorage() {
-    try {
-        localStorage.setItem('locationAppCache', JSON.stringify(cache));
-    } catch (error) {
-        console.error('Failed to save cache:', error);
-    }
+    // Caching disabled
 }
 
 function isCacheValid(timestamp) {
-    return Date.now() - timestamp < CACHE_EXPIRY;
+    return false; // Caching disabled
 }
 
+// Cache functions disabled per user request
 function getCachedRecommendations(category, location) {
-    const key = `${category}-${location}`;
-    const cached = cache.recommendations[key];
-    if (cached && isCacheValid(cached.timestamp)) {
-        console.log('✅ Using cached recommendations for:', category);
-        return cached.data;
-    }
-    return null;
+    return null; // Caching disabled
 }
 
 function setCachedRecommendations(category, location, data) {
-    const key = `${category}-${location}`;
-    cache.recommendations[key] = {
-        data: data,
-        timestamp: Date.now()
-    };
-    saveCacheToStorage();
+    // Caching disabled
 }
 
 function getCachedImage(placeName) {
-    return cache.images[placeName] || null;
+    return null; // Caching disabled
 }
 
 function setCachedImage(placeName, imageUrl) {
-    cache.images[placeName] = imageUrl;
-    saveCacheToStorage();
+    // Caching disabled
 }
 
 function getCachedGeocode(query) {
-    const cached = cache.geocoding[query];
-    if (cached && isCacheValid(cached.timestamp)) {
-        console.log('✅ Using cached geocode for:', query);
-        return cached;
-    }
-    return null;
+    return null; // Caching disabled
 }
 
 function setCachedGeocode(query, lat, lon) {
-    cache.geocoding[query] = {
-        lat: lat,
-        lon: lon,
-        timestamp: Date.now()
-    };
-    saveCacheToStorage();
+    // Caching disabled
 }
 
 // Check server health
@@ -898,3 +1111,15 @@ async function checkServerHealth() {
         console.error('Server not responding. Make sure to run: py app.py');
     }
 }
+
+// Helper function to clear cache (call from console if needed)
+function clearCache() {
+    localStorage.removeItem('locationAppCache');
+    cache.recommendations = {};
+    cache.images = {};
+    cache.geocoding = {};
+    console.log('✅ Cache cleared! Refresh the page.');
+}
+
+// Expose to window for console access
+window.clearCache = clearCache;

@@ -146,6 +146,54 @@ body {
     text-align: center;
 }
 
+/* Distance Filter */
+.distance-filter {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 25px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.filter-label {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.distance-options {
+    display: flex;
+    gap: 10px;
+}
+
+.distance-btn {
+    padding: 10px 20px;
+    background: var(--background);
+    color: var(--text-secondary);
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.distance-btn:hover {
+    border-color: var(--primary);
+    color: var(--text);
+}
+
+.distance-btn.active {
+    background: var(--primary);
+    color: white;
+    border-color: var(--primary);
+}
+
 .category-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
