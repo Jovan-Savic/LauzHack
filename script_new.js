@@ -940,21 +940,40 @@ async function showPlaceDetails(place, number, marker) {
     contentDiv.appendChild(badgesRow);
     
     const description = document.createElement('p');
-    description.style.cssText = 'margin: 0 0 12px 0; font-size: 13px; line-height: 1.4; color: #94a3b8; max-height: 60px; overflow: hidden;';
+    description.style.cssText = 'margin: 0 0 8px 0; font-size: 13px; line-height: 1.4; color: #94a3b8; overflow: hidden; transition: max-height 0.3s ease;';
     description.id = `desc-${number}`;
+    let isExpanded = false;
     
     // Show loading or actual description
     if (place.descriptionLoaded) {
-        description.textContent = place.description.length > 120 ? place.description.substring(0, 120) + '...' : place.description;
+        const fullDesc = place.description;
+        const shortDesc = fullDesc.length > 120 ? fullDesc.substring(0, 120) + '...' : fullDesc;
+        description.textContent = shortDesc;
+        description.style.maxHeight = '60px';
+        
+        // Store full description for expand/collapse
+        description.dataset.fullDesc = fullDesc;
+        description.dataset.shortDesc = shortDesc;
     } else {
         description.textContent = 'Loading description...';
         description.style.fontStyle = 'italic';
+        description.style.maxHeight = '60px';
         
         // Poll for description update
         const checkDescription = setInterval(() => {
             if (place.descriptionLoaded) {
-                description.textContent = place.description.length > 120 ? place.description.substring(0, 120) + '...' : place.description;
+                const fullDesc = place.description;
+                const shortDesc = fullDesc.length > 120 ? fullDesc.substring(0, 120) + '...' : fullDesc;
+                description.textContent = shortDesc;
                 description.style.fontStyle = 'normal';
+                description.dataset.fullDesc = fullDesc;
+                description.dataset.shortDesc = shortDesc;
+                
+                // Show "Show More" button if description is long
+                if (fullDesc.length > 120) {
+                    showMoreBtn.style.display = 'block';
+                }
+                
                 clearInterval(checkDescription);
             }
         }, 500);
@@ -964,6 +983,42 @@ async function showPlaceDetails(place, number, marker) {
     }
     
     contentDiv.appendChild(description);
+    
+    // Add "Show More / Show Less" button for long descriptions
+    const showMoreBtn = document.createElement('button');
+    showMoreBtn.style.cssText = 'display: none; margin-bottom: 12px; padding: 4px 12px; background: transparent; color: #6366f1; border: 1px solid #6366f1; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s;';
+    showMoreBtn.textContent = '📖 Show Full Description';
+    
+    // Show button if description is long
+    if (place.descriptionLoaded && place.description.length > 120) {
+        showMoreBtn.style.display = 'block';
+    }
+    
+    showMoreBtn.onmouseover = () => {
+        showMoreBtn.style.background = '#6366f1';
+        showMoreBtn.style.color = 'white';
+    };
+    showMoreBtn.onmouseout = () => {
+        showMoreBtn.style.background = 'transparent';
+        showMoreBtn.style.color = '#6366f1';
+    };
+    showMoreBtn.onclick = () => {
+        if (!isExpanded) {
+            // Expand
+            description.textContent = description.dataset.fullDesc;
+            description.style.maxHeight = 'none';
+            showMoreBtn.textContent = '📕 Show Less';
+            isExpanded = true;
+        } else {
+            // Collapse
+            description.textContent = description.dataset.shortDesc;
+            description.style.maxHeight = '60px';
+            showMoreBtn.textContent = '📖 Show Full Description';
+            isExpanded = false;
+        }
+    };
+    
+    contentDiv.appendChild(showMoreBtn);
     
     const button = document.createElement('button');
     button.style.cssText = 'width: 100%; padding: 8px; background: #6366f1; color: white; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.2s;';
